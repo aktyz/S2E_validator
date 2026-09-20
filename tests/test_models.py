@@ -6,6 +6,7 @@ from s2e_validator.prefilters import (
     ExistingImage,
     FilterMode,
     NewImage,
+    NoOpFilter,
     PipelineConfig,
     PreFilter,
     PreFilterResult,
@@ -51,6 +52,14 @@ class TestPreFilterSubclassing:
     def test_missing_name_or_cost_rank_fails_at_definition(self, attrs, missing):
         with pytest.raises(TypeError, match=missing):
             type("Incomplete", (PreFilter,), {**attrs, "check": lambda self, i: None})
+
+    def test_filters_inherit_no_op_commit_and_uniqueness_key(self):
+        """#23 can call these on every filter without special-casing."""
+        interaction = make_interaction()
+        noop = NoOpFilter()
+
+        assert noop.uniqueness_key(interaction) is None
+        assert noop.commit(interaction) is None
 
     def test_complete_subclass_is_accepted(self):
         cls = type(

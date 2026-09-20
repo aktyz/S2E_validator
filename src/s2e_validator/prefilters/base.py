@@ -31,7 +31,24 @@ class PreFilter(ABC):
 
     @abstractmethod
     def check(self, interaction: Interaction) -> PreFilterResult:
-        """Inspect one submission and return a verdict."""
+        """Inspect one submission and return a verdict. Must not mutate state."""
+
+    def uniqueness_key(self, interaction: Interaction) -> str | None:
+        """Identity this filter recognises the submission by, if any.
+
+        Settlement reports one of these on-chain. Default: this filter has none.
+        """
+        return None
+
+    def commit(self, interaction: Interaction) -> PreFilterResult | None:
+        """Claim whatever state this filter needs, once the pipeline has passed.
+
+        Called by the orchestrator (#23) on every filter, so filters holding
+        state need no special-casing. Returns a revised result when the claim
+        changed the verdict — two submissions can both pass `check` before
+        either commits, and only one can win the claim — otherwise None.
+        """
+        return None
 
 
 class NoOpFilter(PreFilter):

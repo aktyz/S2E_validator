@@ -17,7 +17,10 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 
 ## Status
 
-Issue #13: pre-filter pipeline architecture & interface. No real filters yet; `NoOpFilter` proves the wiring.
+| Issue | Filter | State |
+|---|---|---|
+| #13 | Pipeline frame, `PreFilter` interface, shadow/enforce modes | Merged |
+| #15 | `ImageExactDuplicateFilter` — exact-duplicate photos | This PR |
 
 ## Run the tests
 
@@ -38,6 +41,10 @@ Requires Python 3.11+. No runtime dependencies so far.
 | `src/s2e_validator/prefilters/base.py` | `PreFilter` interface every check implements, plus `NoOpFilter` |
 | `src/s2e_validator/prefilters/config.py` | `FilterMode` (off / shadow / enforce) and `PipelineConfig` |
 | `src/s2e_validator/prefilters/pipeline.py` | `PreFilterPipeline.run_pre_filters(interaction)` |
+| `src/s2e_validator/prefilters/hashing.py` | `image_identity()`: SHA-256 for uploads, `ref:<id>` for pooled photos. Doubles as the `uniqueness_key`. |
+| `src/s2e_validator/prefilters/stores.py` | `ImageKeyStore` protocol + `InMemoryImageKeyStore` (TTL, lock-guarded atomic claims) |
+| `src/s2e_validator/prefilters/suspicion.py` | `SuspicionLog`: append-only record of cross-user photo matches |
+| `src/s2e_validator/prefilters/image_duplicate.py` | `ImageExactDuplicateFilter` (#15) |
 
 ## Adding a filter
 
@@ -53,6 +60,65 @@ class LengthFormatFilter(PreFilter):
 ```
 
 Then register it in the pipeline and give it a mode in config. Until you do, it runs in **shadow** mode.
+
+## Exact-duplicate detection (issue #15)
+
+Anchored on the **photo**, never on the text: two honest contributors describing the same landmark write similar captions.
+
+| Situation | Verdict |
+|---|---|
+| Same user re-uploads their own photo | **REJECT** `DUPLICATE_IMAGE_SAME_USER` |
+| Another user uploads a photo already claimed — first time | **FLAG** `DUPLICATE_IMAGE_TEXT_ONLY` |
+| Another user uploads it **again** | **REJECT** `DUPLICATE_IMAGE_REFERENCE` |
+| Many users describe the same pooled photo | **PASS** |
+| Same user describes one pooled photo twice | **REJECT** `DUPLICATE_IMAGE_REFERENCE` |
+
+Keys: an uploaded photo is `SHA-256` of the raw bytes, held globally; a pooled photo is `ref:<image_id>`. Every submission also claims a per-user key, `<image key>|user:<id>`.
+
+Pooled-photo keys are scoped per user on purpose: many contributors describing one photo is what the campaign asks for, so only the *same* user repeating it is farming.
+
+**A second person's identical photo is not rejected.** They are describing a photo someone else already owns, which is exactly what a pooled-photo submission is, so the contribution is downgraded to **text-only** with a FLAG and the judge prices it accordingly. Only same-user repeats are unambiguous farming and stay hard rejects.
+
+**Text-only is capped at one per user per photo.** The downgrade claims a per-user key, so a second attempt at the same photo is a REJECT rather than another priced contribution — the same cap a pooled-photo description has. Without it, one account could farm another's photo indefinitely, a flag at a time.
+
+**A text-only contribution is keyed on its text, not the photo.** The photo's key belongs to the original submitter, and settlement uses that key to stop one photo being paid for twice; sharing it would block the copy and the original together. The result carries `uniqueness_key` (`text:<hash>`) and `photo_key` for traceability.
+
+**First claim wins.** The original submitter is never affected by a later duplicate. Results carry `first_submission_id` and `first_seen_at` so an appeal can be traced.
+
+**Cross-user matches go to the suspicion log.** `suspicion.py` keeps an append-only record of two accounts holding a byte-identical photo — evidence for investigating stolen images across campaigns, deliberately separate from both `PreFilterResult` and `ImageKeyStore`. It never changes a verdict. `InMemorySuspicionLog` is a placeholder for the durable fraud repository.
+
+The match is recorded as soon as it is *detected*, in `check` as well as `commit`, so a submission that a later filter rejects still leaves the evidence behind — the copy happened regardless of what the rest of the stage decided. `SuspicionLog.record` is therefore **required to be idempotent** on `(image_key, duplicate_submission_id)`: one submission duplicating one photo is a single fact, however many times it is reported or a crashed `commit` is retried. The Protocol says so, so a durable implementation inherits the rule.
+
+**`check` reads, `commit` writes.** The filter never claims a key during `check`. The orchestrator commits once the whole pipeline passes (#23), so a submission rejected by a *later* filter — a face, say — doesn't lock its own photo out of a corrected resubmission. Re-validating the same `submission_id` is never a duplicate of itself, so retries are safe.
+
+**Claim races are decided at commit.** Two uploads of one photo can both pass `check` before either commits. `ImageKeyStore.add` is atomic and returns `DuplicateClaimResult(seen, claimed)`, and `commit` returns a *revised* verdict when this submission lost — downgrading the loser to text-only rather than paying twice for one photo. `commit` and `uniqueness_key` are on the `PreFilter` interface with no-op defaults, so the orchestrator calls them on every filter without special-casing.
+
+### Store choice and retention
+
+`InMemoryImageKeyStore`: a process-local dict with a **30-day** default time-to-live, expired entries dropped from the front on each lookup.
+
+- **Why in-memory for v1:** no infrastructure to run, and a campaign runs in one validator process.
+- **Concurrency:** nothing processes submissions in parallel yet, but the service in front of this will, so `find`/`add`/`purge_expired` are guarded by a re-entrant lock and claiming is atomic. The lock is held only around dict work.
+- **Known limit:** it does not survive a restart, and previously seen photos become submittable again. Per #12, this store is the *only* defence against repeated cross-wallet payouts for one photo, so a durable store (Redis or a database) behind the same `ImageKeyStore` protocol is required before mainnet. Swapping it needs no filter changes.
+- **Why 30 days:** longer than a run's reward window, so a photo can't be re-submitted inside one campaign. Revisit once campaign length is fixed.
+
+### Measured (Python 3.11.9, Windows laptop)
+
+Re-measured after the lock, the suspicion log and the second (per-user) key claim:
+
+| Measure | Result |
+|---|---|
+| `check` + `commit` per submission | ~20 µs |
+| 50,000 submissions loaded | ~1.0 s |
+| Single lookup against a 50k store | ~0.02 ms |
+
+At Bielik's 1M-photo target the store holds roughly 100 MB of keys, which is the point at which the durable store matters more than speed. `tests/test_image_duplicate_volume.py` re-checks the order of magnitude on every run.
+
+### Open: releasing a claim when a submission is rejected later
+
+A photo's claim is made when Stage 1 passes, but the judge (#stage-2) or settlement can still reject the submission afterwards. The original then holds the photo's key without ever being paid, and a second contributor is capped at text-only on a photo nobody owns.
+
+Nothing is lost today — no judge exists yet — but before the campaign runs, `ImageKeyStore` needs a `release(key, submission_id)` and the judge stage needs to call it on rejection. Worth its own issue rather than guessing the shape here, since it depends on what settlement does with a rejected entry (#12).
 
 ## Decisions (issue #13)
 
