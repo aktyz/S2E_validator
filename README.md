@@ -20,7 +20,8 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 | Issue | Filter | State |
 |---|---|---|
 | #13 | Pipeline frame, `PreFilter` interface, shadow/enforce modes | Merged |
-| #15 | `ImageExactDuplicateFilter` — exact-duplicate photos | This PR |
+| #15 | `ImageExactDuplicateFilter`, exact-duplicate photos | Merged |
+| #14 | `TextFormatFilter`, `ImageFormatFilter`, structural checks | This PR |
 
 ## Run the tests
 
@@ -30,7 +31,7 @@ python -m pip install -e ".[dev]"   # or just: pip install pytest
 python -m pytest
 ```
 
-Requires Python 3.11+. No runtime dependencies so far.
+Requires Python 3.11+. One runtime dependency: **Pillow**, for decoding uploaded photos (#14); perceptual hashing (#16) and face detection (#21) build on it too.
 
 ## Layout
 
@@ -39,12 +40,14 @@ Requires Python 3.11+. No runtime dependencies so far.
 | `src/s2e_validator/prefilters/interaction.py` | `Interaction`: the submission every filter receives. The image is either `NewImage` (uploaded bytes) or `ExistingImage` (reference to a photo already in the pool). |
 | `src/s2e_validator/prefilters/result.py` | `PreFilterResult` and `Verdict` (PASS / FLAG / REJECT) |
 | `src/s2e_validator/prefilters/base.py` | `PreFilter` interface every check implements, plus `NoOpFilter` |
-| `src/s2e_validator/prefilters/config.py` | `FilterMode` (off / shadow / enforce) and `PipelineConfig` |
+| `src/s2e_validator/prefilters/config.py` | `FilterMode` (off / shadow / enforce), `PipelineConfig`, `settings_from_dict` |
 | `src/s2e_validator/prefilters/pipeline.py` | `PreFilterPipeline.run_pre_filters(interaction)` |
 | `src/s2e_validator/prefilters/hashing.py` | `image_identity()`: SHA-256 for uploads, `ref:<id>` for pooled photos. Doubles as the `uniqueness_key`. |
 | `src/s2e_validator/prefilters/stores.py` | `ImageKeyStore` protocol + `InMemoryImageKeyStore` (TTL, lock-guarded atomic claims) |
 | `src/s2e_validator/prefilters/suspicion.py` | `SuspicionLog`: append-only record of cross-user photo matches |
 | `src/s2e_validator/prefilters/image_duplicate.py` | `ImageExactDuplicateFilter` (#15) |
+| `src/s2e_validator/prefilters/text_format.py` | `TextFormatFilter` (#14) |
+| `src/s2e_validator/prefilters/image_format.py` | `ImageFormatFilter` (#14) |
 
 ## Adding a filter
 
@@ -119,6 +122,71 @@ At Bielik's 1M-photo target the store holds roughly 100 MB of keys, which is the
 A photo's claim is made when Stage 1 passes, but the judge (#stage-2) or settlement can still reject the submission afterwards. The original then holds the photo's key without ever being paid, and a second contributor is capped at text-only on a photo nobody owns.
 
 Nothing is lost today — no judge exists yet — but before the campaign runs, `ImageKeyStore` needs a `release(key, submission_id)` and the judge stage needs to call it on rejection. Worth its own issue rather than guessing the shape here, since it depends on what settlement does with a rejected entry (#12).
+## Length & format (issue #14)
+
+Two filters, because text and photo fail in unrelated ways and a campaign may want one enforced before the other.
+
+### `text_format` (cost_rank 10)
+
+| Check | Reason code | Default |
+|---|---|---|
+| Lone surrogates or `U+FFFD` — text that never decoded intact | `TEXT_ENCODING_INVALID` | — |
+| Control characters beyond `\n\r\t` | `TEXT_CONTROL_CHARACTERS` | `max_control_characters: 0` |
+| Empty or whitespace-only | `TEXT_EMPTY` | — |
+| Too short / too long, measured after collapsing whitespace | `TEXT_TOO_SHORT` / `TEXT_TOO_LONG` | `min_chars: 5`, `max_chars: 2000` |
+| The app's own placeholder pasted back | `TEXT_INSTRUCTION_ECHO` | `placeholders: ()` |
+| Repeated **letter** run: `aaaaaaaa` | `TEXT_REPEATED_CHARACTERS` | `max_repeated_run: 5` |
+| Repeating unit: `asdfasdfasdf` | `TEXT_REPEATED_PATTERN` | `min_pattern_repeats: 3`, `min_pattern_coverage: 0.6` |
+| Single token, few distinct characters: `asdfasdf` | `TEXT_LOW_CHARACTER_VARIETY` - **FLAG** | `variety_min_length: 8`, `min_character_variety: 0.5` |
+| Ends mid-word on a hyphen | `TEXT_LOOKS_TRUNCATED` — **FLAG** | `flag_truncated: true` |
+
+`min_chars: 5` is a sanity floor, not a copy of the campaign's rule. Obywatel Bielik requires 100 characters, so anything shorter cannot arrive through their UI; this only catches what comes another way.
+
+**Only category Cc counts as a control character.** Category Cf includes U+200D, which joins every multi-part emoji, plus zero-width spaces and the BOM that ride along with pasted text. Counting those rejected "Zamek w Malborku 👩‍💻" under the default of zero, which is exactly the false reject this stage is meant to avoid.
+
+**Runs count letters only.** "1000000" and "Wow!!!!!!" are odd, not structurally invalid, and the judge can weigh them.
+
+**Low character variety is a flag, not a reject.** "Mississippi" scores 0.36, the same as `asdfasdf`. A structural check cannot separate them, so it hands both to the judge with the observation attached.
+
+**`placeholders` is empty until Bielik's real app strings are known** (#28). The check is exact-match on the normalised text, so a description that merely starts with the placeholder wording still passes.
+
+### `image_format` (cost_rank 12)
+
+| Check | Reason code | Default |
+|---|---|---|
+| File size bounds, checked before decoding | `IMAGE_FILE_TOO_SMALL` / `IMAGE_FILE_TOO_LARGE` | `4 KiB` … `25 MiB` |
+| Decodes at all | `IMAGE_UNDECODABLE` | — |
+| Pixel count sanity | `IMAGE_DECOMPRESSION_BOMB` | Pillow's `MAX_IMAGE_PIXELS` |
+| Allowed format | `IMAGE_FORMAT_NOT_ALLOWED` | `JPEG, PNG, WEBP` |
+| Minimum resolution | `IMAGE_RESOLUTION_TOO_LOW` | `256 × 256` |
+
+Submissions describing a photo already in the pool carry no bytes, so this filter passes them through — the pooled photo was checked when it arrived.
+
+The filter calls Pillow's `load()`, not `verify()`. `verify()` only walks the file structure and lets a truncated JPEG through, which would then blow up inside perceptual hashing (#16) or face detection (#21). **Known limit:** a photo whose pixel data is corrupted but still decodable passes here; whether the picture shows anything is the judge's call.
+
+**Everything cheap is decided before decoding.** `Image.open()` is lazy, so file size, format and dimensions are all known before a pixel is read: a 25 MiB GIF is rejected on its format without ever reaching a decoder, which also keeps untrusted bytes away from most of the decoders Pillow ships.
+
+**The pixel bound is ours, not Pillow's.** Pillow only *warns* between 1x and 2x `MAX_IMAGE_PIXELS` and raises only above 2x, so a highly compressible file inside that window would be decoded in full. `max_pixels` is checked explicitly after `open()` and before `load()`, and does not depend on a process-wide global that another filter can change. Pillow's own error is kept as a backstop.
+
+**Anything raised while decoding means undecodable.** Pillow's decoders raise widely (`struct.error`, `zlib.error` and others), and letting one escape would make the pipeline fail open and send a broken file to the judge.
+
+### Tuning without a redeploy
+
+`PipelineConfig` carries thresholds next to modes, and each filter parses its own:
+
+```json
+{
+  "default_mode": "shadow",
+  "filters": {
+    "image_format": "enforce",
+    "text_format": {"mode": "enforce", "settings": {"min_chars": 8, "placeholders": ["Opisz zdjęcie"]}}
+  }
+}
+```
+
+`settings_from_dict` rejects unknown keys, and each settings class checks its own values: a list field given a bare string, a threshold given `"5"` instead of `5`, or a ratio outside 0..1 all fail when the config loads rather than once a submission reaches the filter. Without that, a filter would construct fine, then raise inside `check()` on every submission, and the pipeline's fail-open rule would quietly mean it never worked.
+
+**Where the wiring lives.** This PR parses config into settings; turning a config file into filter instances (and checking that its filter names are real) is the orchestrator's job in #23. Until that lands, a caller builds `TextFormatFilter(TextFormatSettings.from_dict(...))` itself.
 
 ## Decisions (issue #13)
 

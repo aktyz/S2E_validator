@@ -10,6 +10,8 @@ from s2e_validator.prefilters import (
     PipelineConfig,
     PreFilter,
     PreFilterResult,
+    TextFormatFilter,
+    TextFormatSettings,
     Verdict,
 )
 
@@ -107,3 +109,45 @@ class TestPipelineConfig:
     def test_from_dict_rejects_unknown_keys(self):
         with pytest.raises(ValueError, match="Unknown"):
             PipelineConfig.from_dict({"filter": {"length_format": "enforce"}})
+
+    def test_from_dict_reads_mode_and_thresholds_together(self):
+        config = PipelineConfig.from_dict(
+            {
+                "filters": {
+                    "image_format": "enforce",
+                    "text_format": {"mode": "enforce", "settings": {"min_chars": 8}},
+                }
+            }
+        )
+
+        assert config.mode_for("image_format") is FilterMode.ENFORCE
+        assert config.mode_for("text_format") is FilterMode.ENFORCE
+        assert config.settings_for("text_format") == {"min_chars": 8}
+        assert config.settings_for("image_format") == {}
+
+    def test_settings_without_a_mode_keep_the_default(self):
+        config = PipelineConfig.from_dict({"filters": {"text_format": {"settings": {"min_chars": 8}}}})
+
+        assert config.mode_for("text_format") is FilterMode.SHADOW
+        assert config.settings_for("text_format") == {"min_chars": 8}
+
+    @pytest.mark.parametrize(
+        "entry", [{"setting": {"min_chars": 8}}, {"mode": "enforce", "extra": 1}, 42]
+    )
+    def test_from_dict_rejects_malformed_filter_entries(self, entry):
+        with pytest.raises(ValueError):
+            PipelineConfig.from_dict({"filters": {"text_format": entry}})
+
+    def test_thresholds_reach_the_filter(self):
+        """A config file can tune a filter without touching code."""
+        config = PipelineConfig.from_dict(
+            {"filters": {"text_format": {"mode": "enforce", "settings": {"min_chars": 40}}}}
+        )
+        text_filter = TextFormatFilter(
+            TextFormatSettings.from_dict(config.settings_for("text_format"))
+        )
+
+        result = text_filter.check(make_interaction(text="Pierogi ruskie"))
+
+        assert result.reason_code == "TEXT_TOO_SHORT"
+        assert result.details["minimum"] == 40
