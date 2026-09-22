@@ -31,7 +31,16 @@ class PreFilter(ABC):
 
     @abstractmethod
     def check(self, interaction: Interaction) -> PreFilterResult:
-        """Inspect one submission and return a verdict. Must not mutate state."""
+        """Inspect one submission and return a verdict.
+
+        Must not change anything that affects a verdict: no claims, no
+        fingerprints, nothing a later submission is judged against. That is
+        `commit`'s job, so a submission rejected elsewhere leaves no trace.
+
+        The one exception is evidence: appending to the suspicion log, which is
+        idempotent and never read back into a verdict, so a copy is recorded
+        even when another filter rejects the submission that carried it.
+        """
 
     def uniqueness_key(self, interaction: Interaction) -> str | None:
         """Identity this filter recognises the submission by, if any.

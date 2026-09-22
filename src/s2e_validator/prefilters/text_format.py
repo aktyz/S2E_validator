@@ -10,6 +10,7 @@ from typing import Any
 from .base import PreFilter
 from .interaction import Interaction
 from .result import PreFilterResult
+from .text import normalize
 from .settings import (
     require_bool,
     require_float,
@@ -29,14 +30,13 @@ REASON_LOW_VARIETY = "TEXT_LOW_CHARACTER_VARIETY"
 REASON_INSTRUCTION_ECHO = "TEXT_INSTRUCTION_ECHO"
 REASON_LOOKS_TRUNCATED = "TEXT_LOOKS_TRUNCATED"
 
-REPLACEMENT_CHARACTER = "�"
+REPLACEMENT_CHARACTER = "\ufffd"
 #: Unicode category Cc only, minus the whitespace people actually type. Format
 #: characters (Cf) are deliberately excluded: U+200D joins every multi-part
 #: emoji, and U+200B/U+FEFF ride along with ordinary pasted text.
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 #: Non-greedy unit of 2-6 characters immediately repeated: "asdfasdfasdf".
 _REPEATED_PATTERN = re.compile(r"(.{2,6}?)\1+", re.DOTALL)
-_WHITESPACE_RUN = re.compile(r"\s+")
 #: A hyphen attached to a word, not a spaced dash used as punctuation.
 _TRAILING_HYPHEN = re.compile(r"\w-$")
 
@@ -82,11 +82,6 @@ class TextFormatSettings:
         require_str_sequence(parsed.placeholders, "placeholders")
         require_bool(parsed.flag_truncated, "flag_truncated")
         return parsed
-
-
-def normalize(text: str) -> str:
-    """Trim and collapse whitespace, the form used for length and echo checks."""
-    return _WHITESPACE_RUN.sub(" ", text).strip()
 
 
 class TextFormatFilter(PreFilter):

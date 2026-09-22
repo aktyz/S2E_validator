@@ -20,8 +20,9 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 | Issue | Filter | State |
 |---|---|---|
 | #13 | Pipeline frame, `PreFilter` interface, shadow/enforce modes | Merged |
+| #14 | `TextFormatFilter`, `ImageFormatFilter`, structural checks | Merged |
 | #15 | `ImageExactDuplicateFilter`, exact-duplicate photos | Merged |
-| #14 | `TextFormatFilter`, `ImageFormatFilter`, structural checks | This PR |
+| #16 | `ImageNearDuplicateFilter`, `TextNearDuplicateFilter`, near-duplicates | This PR |
 
 ## Run the tests
 
@@ -42,12 +43,15 @@ Requires Python 3.11+. One runtime dependency: **Pillow**, for decoding uploaded
 | `src/s2e_validator/prefilters/base.py` | `PreFilter` interface every check implements, plus `NoOpFilter` |
 | `src/s2e_validator/prefilters/config.py` | `FilterMode` (off / shadow / enforce), `PipelineConfig`, `settings_from_dict` |
 | `src/s2e_validator/prefilters/pipeline.py` | `PreFilterPipeline.run_pre_filters(interaction)` |
-| `src/s2e_validator/prefilters/hashing.py` | `image_identity()`: SHA-256 for uploads, `ref:<id>` for pooled photos. Doubles as the `uniqueness_key`. |
-| `src/s2e_validator/prefilters/stores.py` | `ImageKeyStore` protocol + `InMemoryImageKeyStore` (TTL, lock-guarded atomic claims) |
-| `src/s2e_validator/prefilters/suspicion.py` | `SuspicionLog`: append-only record of cross-user photo matches |
-| `src/s2e_validator/prefilters/image_duplicate.py` | `ImageExactDuplicateFilter` (#15) |
 | `src/s2e_validator/prefilters/text_format.py` | `TextFormatFilter` (#14) |
 | `src/s2e_validator/prefilters/image_format.py` | `ImageFormatFilter` (#14) |
+| `src/s2e_validator/prefilters/hashing.py` | `image_identity()` (SHA-256 / `ref:<id>`, doubles as the `uniqueness_key`), `dhash()`, `simhash()`, `hamming()` |
+| `src/s2e_validator/prefilters/stores.py` | `ImageKeyStore` + `InMemoryImageKeyStore` (TTL, lock-guarded atomic claims); near-duplicate windows |
+| `src/s2e_validator/prefilters/suspicion.py` | `SuspicionLog`: append-only record of cross-user photo matches |
+| `src/s2e_validator/prefilters/image_duplicate.py` | `ImageExactDuplicateFilter` (#15) |
+| `src/s2e_validator/prefilters/near_duplicate.py` | `ImageNearDuplicateFilter`, `TextNearDuplicateFilter` (#16) |
+| `src/s2e_validator/prefilters/windows.py` | `HashWindow`: bucketed, TTL-bounded fingerprint window (#16) |
+| `src/s2e_validator/prefilters/text.py` | `normalize()` and `canonical()`, shared by every filter that reads a description |
 
 ## Adding a filter
 
@@ -122,6 +126,7 @@ At Bielik's 1M-photo target the store holds roughly 100 MB of keys, which is the
 A photo's claim is made when Stage 1 passes, but the judge (#stage-2) or settlement can still reject the submission afterwards. The original then holds the photo's key without ever being paid, and a second contributor is capped at text-only on a photo nobody owns.
 
 Nothing is lost today — no judge exists yet — but before the campaign runs, `ImageKeyStore` needs a `release(key, submission_id)` and the judge stage needs to call it on rejection. Worth its own issue rather than guessing the shape here, since it depends on what settlement does with a rejected entry (#12).
+
 ## Length & format (issue #14)
 
 Two filters, because text and photo fail in unrelated ways and a campaign may want one enforced before the other.
@@ -187,6 +192,83 @@ The filter calls Pillow's `load()`, not `verify()`. `verify()` only walks the fi
 `settings_from_dict` rejects unknown keys, and each settings class checks its own values: a list field given a bare string, a threshold given `"5"` instead of `5`, or a ratio outside 0..1 all fail when the config loads rather than once a submission reaches the filter. Without that, a filter would construct fine, then raise inside `check()` on every submission, and the pipeline's fail-open rule would quietly mean it never worked.
 
 **Where the wiring lives.** This PR parses config into settings; turning a config file into filter instances (and checking that its filter names are real) is the orchestrator's job in #23. Until that lands, a caller builds `TextFormatFilter(TextFormatSettings.from_dict(...))` itself.
+
+## Near-duplicate detection (issue #16)
+
+Catches what exact hashing misses: a photo re-saved or resized, and a caption reused with small edits. No embeddings: a model call would break the cost premise. dHash and SimHash are deterministic, local and bounded.
+
+### Scenarios
+
+| Scenario | Verdict |
+|---|---|
+| Same user, same photo re-encoded or resized | **REJECT** `NEAR_DUPLICATE_IMAGE_SAME_USER` |
+| Another user, same photo lightly edited, first time | **FLAG** `NEAR_DUPLICATE_IMAGE_TEXT_ONLY` + suspicion log |
+| That user edits the same photo again | **REJECT** `NEAR_DUPLICATE_IMAGE_SAME_USER` |
+| Same user, near-identical caption on a *different* photo | **REJECT** `NEAR_DUPLICATE_TEXT_TEMPLATE` |
+| Another user, long near-identical caption | **REJECT** `NEAR_DUPLICATE_TEXT_ACROSS_USERS` |
+| Different users, different photos, similar captions (same landmark) | **PASS** |
+| Identical *short* captions, same or different user ("Pierogi ruskie") | **PASS** |
+| Caption too long to compare whole | **FLAG** `NEAR_DUPLICATE_TEXT_UNCOMPARABLE` |
+| Same caption on the same photo | **PASS** here; the image filters own it |
+
+### Strictest question first
+
+Each rule is its own lookup, asked in order: "does *this user* already have something this close?" (reject) before "does *anyone else*?" (flag or reject). Asking only "what is nearest?" made the verdict depend on whose fingerprint happened to be closest, which let a user collect unlimited text-only flags by editing someone else's photo repeatedly.
+
+**Text-only is capped at one per user per photo**, as with exact duplicates. The cap attaches to the *photo copied*, not to the user's edit of it: two edits can sit further from each other than either sits from the original, so when a submission is downgraded, the original's fingerprint is recorded in that user's bucket too.
+
+**Only originals enter the global bucket.** First claim wins, so a later duplicate is always attributed to the copier.
+
+### Bounded input
+
+A filter upstream may be in shadow mode, which never stops a submission, so these functions bound themselves rather than trusting `image_format` or `text_format`:
+
+- **Photos:** dimensions are read from the lazy `open()` and anything above `max_pixels` (50 MP, the same bound as `image_format`) is not decoded. For JPEG, `draft()` asks the decoder to downscale while decoding, so a 12 MP photo never exists at full size: **152 ms to 35 ms** on a 12 MP JPEG. A photo that cannot be fingerprinted passes with `fingerprint: skipped` and a reason, rather than raising.
+- **Text:** a caption is compared whole or not at all. Over 8,000 raw characters, or over 2,000 once invisible characters are removed, it is **FLAG** `NEAR_DUPLICATE_TEXT_UNCOMPARABLE` for the judge and nothing is recorded. Comparing only a prefix was defeatable: invisible padding in front of a copy canonicalised to an empty string, and a unique preamble could push the copied part outside the prefix.
+
+### Invisible edits
+
+Fingerprints and text-only keys are built on a canonical form: NFKC, Unicode category Cf removed, whitespace collapsed, case-folded. Zero-width characters inserted between letters, or Polish letters typed in decomposed form, render identically but used to move the hash far past the threshold. `text_format` deliberately lets Cf characters through because emoji depend on them, so this is where they are neutralised.
+
+### Concurrency
+
+`commit` decides and inserts as one step under the window's lock, so two simultaneous near-identical uploads cannot both win. Hashing happens first and outside the lock, so one worker's SimHash or SHA-256 never blocks another's commit. Tested with 16 threads racing, for photos and for captions: exactly one keeps the photo.
+
+Fingerprints are cached by a **digest** of the input, never the input itself: keyed on content, so a corrected resubmission under the same id is judged afresh, and bounded, so the cache holds kilobytes rather than up to 256 photos of 25 MiB.
+
+### Thresholds, and what they rest on
+
+| Text edit | Distance (of 64 bits) |
+|---|---|
+| Punctuation only | 2 |
+| Typo | 5 |
+| Words reordered | 9 |
+| One word swapped | 11 |
+| Diacritics stripped | 13 |
+| **One honest pair describing one landmark** | **16** |
+
+| Photo edit, with `draft` | Textured test photo | 12 MP phone-style photo |
+|---|---|---|
+| Resize to 50% and recompress | 8 | 1 |
+| Recompress at quality 10 | 12 | 0 |
+| **Different photos** | **24 to 34** | **29 to 35** |
+
+`same_user_max_distance: 10`, `cross_user_max_distance: 4`, image `max_distance: 10`.
+
+**These are synthetic measurements, and the honest-pair floor rests on a single pair.** Noise photos have independent hashes by construction, so they say little about two honest photos of the same landmark from the same viewpoint, which is the campaign's normal case and can land much closer. A false positive there is not free: cross-user it downgrades an honest contributor to text-only. Recalibration against real Bielik submissions is #27, and nothing here should be enforced before it.
+
+### Measured latency (Python 3.11.9, Windows laptop)
+
+| Step | Time |
+|---|---|
+| Image `check`, 12 MP JPEG, cold decode, 2k-photo window | ~25 ms |
+| Image `commit`, fingerprint cached | ~5 ms |
+| Text `check`, worst case: 10k captions in the user's bucket and 10k in the global one | ~16 ms |
+| Text `check`, 2,000-character caption | ~17 ms |
+
+**Scale ceiling.** Lookup is a linear scan, about 0.1 microseconds per entry, under one lock. That is fine into the tens of thousands of entries per bucket, which is what is measured. The global bucket holds every photo in the retention window, so at hundreds of thousands of photos a lookup reaches tens of milliseconds and serialises behind the lock. Multi-index hashing is the next step if the metrics show the need; at a 10-bit threshold it narrows candidates by only about six times, so it is not free either. Buckets expire lazily, one at a time as they are touched, with an occasional full sweep.
+
+**Known gaps for v1, accepted:** heavy crops and rotations defeat dHash, and deep semantic paraphrase and stripped diacritics defeat SimHash. Both are what the judge is for.
 
 ## Decisions (issue #13)
 

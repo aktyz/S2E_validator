@@ -93,6 +93,8 @@ class InMemoryImageKeyStore:
         with self._lock:
             return self._purge_expired()
 
+    # -- internal ---------------------------------------------------------
+
     def _purge_expired(self) -> int:
         cutoff = self._clock() - self._retention
         # Entries are insertion-ordered, so expiry only walks the front of the

@@ -79,7 +79,7 @@ class TestEncoding:
         assert result.details["cause"] == "surrogates"
 
     def test_replacement_characters_are_rejected(self):
-        result = check("Zamek w Malborku ��")
+        result = check("Zamek w Malborku \ufffd\ufffd")
         assert result.reason_code == REASON_ENCODING
         assert result.details["count"] == 2
 
@@ -93,17 +93,17 @@ class TestEncoding:
     def test_the_emoji_string_from_the_readme_passes(self):
         """Regression pin for the #31 review: this exact string was rejected as
         TEXT_CONTROL_CHARACTERS while Unicode category Cf was counted."""
-        assert check("Zamek w Malborku \U0001f469‍\U0001f4bb").verdict is Verdict.PASS
+        assert check("Zamek w Malborku \U0001f469\u200d\U0001f4bb").verdict is Verdict.PASS
 
     @pytest.mark.parametrize(
         "text, note",
         [
-            ("Zamek w Malborku ❤️‍\U0001f525", "ZWJ inside another multi-part emoji"),
-            ("Zamek​ w Malborku", "zero-width space, common when pasting"),
-            ("Zamek‌ w Malborku", "zero-width non-joiner"),
-            ("Zamek kro­lewski w Malborku", "soft hyphen"),
-            ("﻿Zamek w Malborku", "byte order mark"),
-            ("Zamek w Malborku ❤️", "variation selector"),
+            ("Zamek w Malborku ❤\ufe0f\u200d\U0001f525", "ZWJ inside another multi-part emoji"),
+            ("Zamek\u200b w Malborku", "zero-width space, common when pasting"),
+            ("Zamek\u200c w Malborku", "zero-width non-joiner"),
+            ("Zamek kro\u00adlewski w Malborku", "soft hyphen"),
+            ("\ufeffZamek w Malborku", "byte order mark"),
+            ("Zamek w Malborku ❤\ufe0f", "variation selector"),
         ],
     )
     def test_format_characters_are_not_control_characters(self, text, note):
