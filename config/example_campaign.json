@@ -1,0 +1,37 @@
+{
+  "default_mode": "shadow",
+  "filters": {
+    "text_format": {
+      "mode": "enforce",
+      "settings": {
+        "min_chars": 5,
+        "max_chars": 2000,
+        "placeholders": []
+      }
+    },
+    "image_format": {
+      "mode": "enforce",
+      "settings": {
+        "allowed_formats": ["JPEG", "PNG", "WEBP"],
+        "min_width": 256,
+        "min_height": 256
+      }
+    },
+    "image_exact_duplicate": "enforce",
+    "image_near_duplicate": {
+      "mode": "shadow",
+      "settings": {
+        "max_distance": 10,
+        "retention_days": 30
+      }
+    },
+    "text_near_duplicate": {
+      "mode": "shadow",
+      "settings": {
+        "same_user_max_distance": 10,
+        "cross_user_max_distance": 4,
+        "min_cross_user_chars": 60
+      }
+    }
+  }
+}

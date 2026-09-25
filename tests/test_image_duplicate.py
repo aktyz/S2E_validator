@@ -189,6 +189,39 @@ class TestCommitDiscipline:
         assert revised.reason_code == REASON_SAME_USER
 
 
+class TestRollback:
+    """The stage calls `rollback` when a *later* filter rejects at commit time,
+    so that submission ends up having claimed nothing."""
+
+    def test_rollback_frees_the_photo_for_a_fresh_attempt(self, duplicate_filter):
+        rejected = make_interaction(submission_id="sub-1", user_id="ann", image=PHOTO)
+        duplicate_filter.commit(rejected)
+
+        duplicate_filter.rollback(rejected)
+
+        again = make_interaction(submission_id="sub-2", user_id="ann", image=PHOTO)
+        assert duplicate_filter.check(again).verdict is Verdict.PASS
+
+    def test_rollback_cannot_take_another_submissions_claim(self):
+        store = InMemoryImageKeyStore()
+        duplicate_filter = ImageExactDuplicateFilter(store=store)
+        owner = make_interaction(submission_id="sub-1", user_id="ann", image=PHOTO)
+        loser = make_interaction(submission_id="sub-2", user_id="bob", image=PHOTO)
+        duplicate_filter.commit(owner)
+        duplicate_filter.commit(loser)  # downgraded to text-only; owns nothing here
+
+        duplicate_filter.rollback(loser)
+
+        assert store.find(image_identity(PHOTO).key).submission_id == "sub-1"
+
+    def test_rollback_is_safe_when_nothing_was_committed(self, duplicate_filter):
+        never_committed = make_interaction(submission_id="sub-9", user_id="ann", image=PHOTO)
+
+        duplicate_filter.rollback(never_committed)  # must not raise
+
+        assert duplicate_filter.check(never_committed).verdict is Verdict.PASS
+
+
 class TestTextOnlyIsCappedPerUser:
     def test_submitting_another_users_photo_twice_is_rejected(self, duplicate_filter):
         """A text-only downgrade is one contribution, not an unlimited licence."""
@@ -242,6 +275,20 @@ class TestSuspicionLog:
         assert (event.original_user_id, event.duplicate_user_id) == ("ann", "bob")
         assert event.original_submission_id == "sub-1"
         assert event.image_key == image_identity(PHOTO).key
+
+    def test_rollback_retracts_only_this_submissions_record(self):
+        """Carol's copy stands; Bob's is rolled back. Only Bob's record goes."""
+        log = InMemorySuspicionLog()
+        duplicate_filter = ImageExactDuplicateFilter(suspicion_log=log)
+        submit(duplicate_filter, submission_id="sub-1", user_id="ann", image=PHOTO)
+        submit(duplicate_filter, submission_id="sub-2", user_id="carol", image=PHOTO)
+        bob = make_interaction(submission_id="sub-3", user_id="bob", image=PHOTO)
+        duplicate_filter.commit(bob)
+        assert len(log) == 2
+
+        duplicate_filter.rollback(bob)
+
+        assert [event.duplicate_user_id for event in log.events] == ["carol"]
 
     def test_same_user_repeat_is_not_a_cross_user_match(self):
         log = InMemorySuspicionLog()

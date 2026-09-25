@@ -33,13 +33,10 @@ class PreFilter(ABC):
     def check(self, interaction: Interaction) -> PreFilterResult:
         """Inspect one submission and return a verdict.
 
-        Must not change anything that affects a verdict: no claims, no
-        fingerprints, nothing a later submission is judged against. That is
-        `commit`'s job, so a submission rejected elsewhere leaves no trace.
-
-        The one exception is evidence: appending to the suspicion log, which is
-        idempotent and never read back into a verdict, so a copy is recorded
-        even when another filter rejects the submission that carried it.
+        Must not change anything: no claims, no fingerprints, and no suspicion
+        log entries either. That is `commit`'s job, so a submission rejected
+        elsewhere leaves no trace, whether that trace would be a claimed key or
+        a fraud record against the account.
         """
 
     def uniqueness_key(self, interaction: Interaction) -> str | None:
@@ -58,6 +55,17 @@ class PreFilter(ABC):
         either commits, and only one can win the claim — otherwise None.
         """
         return None
+
+    def rollback(self, interaction: Interaction) -> None:
+        """Undo this submission's own commit, and nothing else.
+
+        The orchestrator calls this on every filter that already committed when
+        a later filter rejects at commit time, so "a rejected submission claims
+        nothing" holds for that path too: no claimed keys, no fingerprints and no
+        suspicion-log events. Must release only state this submission owns, and
+        must be safe to call when it committed nothing.
+        Default: this filter holds no state.
+        """
 
 
 class NoOpFilter(PreFilter):

@@ -25,3 +25,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Latency tests assert on wall-clock time, which flakes on a shared runner, so
+# they are opt-in: `python -m pytest -m slow`.
+markers = ["slow: wall-clock latency budgets; run deliberately, on an idle machine"]
+addopts = "-m 'not slow'"

@@ -378,6 +378,52 @@ class TestInjectedWindow:
         assert len(window) == 2
 
 
+class TestRollback:
+    """Called by the stage when a later filter rejects at commit time: the
+    rejected submission must leave no fingerprint for its own corrected
+    resubmission to collide with."""
+
+    def test_an_image_rollback_empties_both_buckets(self):
+        window = HashWindow()
+        image_filter = ImageNearDuplicateFilter(window=window)
+        rejected = make_interaction(submission_id="sub-1", user_id="ann", image=NewImage(photo(1)))
+        image_filter.commit(rejected)
+
+        image_filter.rollback(rejected)
+
+        assert len(window) == 0
+
+    def test_a_text_only_downgrade_leaves_nothing_behind(self):
+        """The downgrade records two entries in the copier's bucket, their own
+        fingerprint and the original's. Both belong to that submission."""
+        window = HashWindow()
+        image_filter = ImageNearDuplicateFilter(window=window)
+        run(image_filter, submission_id="ann-1", user_id="ann", image=NewImage(photo(1)))
+        copier = make_interaction(
+            submission_id="bob-1",
+            user_id="bob",
+            image=NewImage(recompressed(photo(1), quality=30, scale=0.5)),
+        )
+        image_filter.commit(copier)
+
+        image_filter.rollback(copier)
+
+        # Only Ann's two entries survive.
+        assert len(window) == 2
+
+    def test_a_text_rollback_empties_both_buckets(self):
+        window = HashWindow()
+        text_filter = TextNearDuplicateFilter(window=window)
+        rejected = make_interaction(
+            submission_id="sub-1", user_id="ann", image=NewImage(photo(1)), text=CASTLE
+        )
+        text_filter.commit(rejected)
+
+        text_filter.rollback(rejected)
+
+        assert len(window) == 0
+
+
 class TestStrictnessOrder:
     """A verdict must not depend on whose fingerprint happens to be nearest."""
 

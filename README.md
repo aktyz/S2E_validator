@@ -22,7 +22,8 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 | #13 | Pipeline frame, `PreFilter` interface, shadow/enforce modes | Merged |
 | #14 | `TextFormatFilter`, `ImageFormatFilter`, structural checks | Merged |
 | #15 | `ImageExactDuplicateFilter`, exact-duplicate photos | Merged |
-| #16 | `ImageNearDuplicateFilter`, `TextNearDuplicateFilter`, near-duplicates | This PR |
+| #16 | `ImageNearDuplicateFilter`, `TextNearDuplicateFilter`, near-duplicates | Merged |
+| #23 | Orchestrator: config-built stage, commit phase | This PR |
 
 ## Run the tests
 
@@ -30,7 +31,10 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 cd validator
 python -m pip install -e ".[dev]"   # or just: pip install pytest
 python -m pytest
+python -m pytest -m slow            # latency budgets, opt-in
 ```
+
+The `slow` tests assert on wall-clock time, which flakes on a shared CI runner, so they are left out of the default run and out of CI. Run them deliberately, on an idle machine, when a change could affect the hot path.
 
 Requires Python 3.11+. One runtime dependency: **Pillow**, for decoding uploaded photos (#14); perceptual hashing (#16) and face detection (#21) build on it too.
 
@@ -52,6 +56,7 @@ Requires Python 3.11+. One runtime dependency: **Pillow**, for decoding uploaded
 | `src/s2e_validator/prefilters/near_duplicate.py` | `ImageNearDuplicateFilter`, `TextNearDuplicateFilter` (#16) |
 | `src/s2e_validator/prefilters/windows.py` | `HashWindow`: bucketed, TTL-bounded fingerprint window (#16) |
 | `src/s2e_validator/prefilters/text.py` | `normalize()` and `canonical()`, shared by every filter that reads a description |
+| `src/s2e_validator/prefilters/registry.py` | `build_pipeline()`, `load_config()`: the stage assembled from config (#23) |
 
 ## Adding a filter
 
@@ -94,7 +99,7 @@ Pooled-photo keys are scoped per user on purpose: many contributors describing o
 
 **Cross-user matches go to the suspicion log.** `suspicion.py` keeps an append-only record of two accounts holding a byte-identical photo — evidence for investigating stolen images across campaigns, deliberately separate from both `PreFilterResult` and `ImageKeyStore`. It never changes a verdict. `InMemorySuspicionLog` is a placeholder for the durable fraud repository.
 
-The match is recorded as soon as it is *detected*, in `check` as well as `commit`, so a submission that a later filter rejects still leaves the evidence behind — the copy happened regardless of what the rest of the stage decided. `SuspicionLog.record` is therefore **required to be idempotent** on `(image_key, duplicate_submission_id)`: one submission duplicating one photo is a single fact, however many times it is reported or a crashed `commit` is retried. The Protocol says so, so a durable implementation inherits the rule.
+The match is recorded in `commit` only, never in `check`: a submission the stage goes on to reject leaves no fraud record against the account, and a corrected resubmission carries a new `submission_id`, so logging at detection would count one photo twice. If the stage rejects *after* the match was recorded (a claim race lost at commit time), `rollback` retracts it. `SuspicionLog.record` is still **required to be idempotent** on `(image_key, duplicate_submission_id)`: one submission duplicating one photo is a single fact, however many times it is reported or a crashed `commit` is retried. The Protocol says so, so a durable implementation inherits the rule.
 
 **`check` reads, `commit` writes.** The filter never claims a key during `check`. The orchestrator commits once the whole pipeline passes (#23), so a submission rejected by a *later* filter — a face, say — doesn't lock its own photo out of a corrected resubmission. Re-validating the same `submission_id` is never a duplicate of itself, so retries are safe.
 
@@ -269,6 +274,52 @@ Fingerprints are cached by a **digest** of the input, never the input itself: ke
 **Scale ceiling.** Lookup is a linear scan, about 0.1 microseconds per entry, under one lock. That is fine into the tens of thousands of entries per bucket, which is what is measured. The global bucket holds every photo in the retention window, so at hundreds of thousands of photos a lookup reaches tens of milliseconds and serialises behind the lock. Multi-index hashing is the next step if the metrics show the need; at a 10-bit threshold it narrows candidates by only about six times, so it is not free either. Buckets expire lazily, one at a time as they are touched, with an occasional full sweep.
 
 **Known gaps for v1, accepted:** heavy crops and rotations defeat dHash, and deep semantic paraphrase and stripped diacritics defeat SimHash. Both are what the judge is for.
+
+## The stage, wired together (issue #23)
+
+```python
+from s2e_validator.prefilters import build_pipeline, load_config
+
+pipeline = build_pipeline(load_config("config/example_campaign.json"))
+outcome = pipeline.run_pre_filters(interaction)
+
+if outcome.proceeds_to_judge:
+    judge(interaction, flags=outcome.flags)   # stage 2, not built yet
+else:
+    reject(outcome.reason_code, outcome.decided_by)
+```
+
+Filters run in `cost_rank` order — text checks, image checks, exact hashing, then the two near-duplicate scans:
+
+| Order | Filter | Cost |
+|---|---|---|
+| 10 | `text_format` | string work |
+| 12 | `image_format` | decodes the photo |
+| 20 | `image_exact_duplicate` | SHA-256 + dict lookup |
+| 30 | `image_near_duplicate` | dHash + window scan |
+| 32 | `text_near_duplicate` | SimHash + window scan |
+
+**Check, then commit.** Every filter is checked first; only if the stage passes does each filter `commit` — claiming a photo hash, recording a fingerprint. So a submission rejected by *any* filter claims nothing and can be fixed and resubmitted. A `commit` may return a revised verdict when a contested claim was lost, and an enforced REJECT there still stops the submission.
+
+**Rejected at commit time, too.** A commit-time REJECT arrives after earlier filters have already claimed their keys, so the stage calls `rollback` on each of them: `ImageKeyStore.release(key, submission_id)` gives a key back only to the submission that holds it, the near-duplicate windows drop that submission's fingerprints, and `SuspicionLog.retract` withdraws any cross-user match it recorded, so the corrected resubmission is not counted as a second copy of the same photo. Without it the loser of a claim race would be locked out by its own abandoned claim. Rollback is fail-open like `check`: a filter that cannot undo its claim logs it rather than crashing the stage.
+
+**Later filters' check results are kept.** When a commit rejects, the filters after it never commit, but their `check` already ran, and those records stay in the result. Shadow mode exists to collect exactly that evidence.
+
+**What reaches Stage 2.** Only PASS proceeds. Flags travel with it as context (`outcome.flags`), so the judge knows a submission is, say, text-only because someone else owns the photo. A REJECT never becomes a batch entry at all, so it leaves no on-chain trace — the mapping raised in #12 and #28 is still open, and switching a reject to `Q_i = 0` instead would be a change here, not in the filters.
+
+### Everything is config
+
+`build_pipeline` constructs every known filter from `FILTER_BUILDERS`; config alone decides which run, which can reject, and with what thresholds. A config naming an unknown filter, or an unknown key, fails loudly rather than silently doing nothing. That rule leaves no room for comment keys, so the notes live here instead of in the file.
+
+`config/example_campaign.json` is the worked example: every filter not listed runs in shadow mode, so a new filter can never start rejecting contributors by accident. Promote a filter to `enforce` only once its shadow numbers look right. A test loads that exact file, so the example cannot rot.
+
+**Reuse one `FilterDependencies` across reloads.** Retuning a threshold means calling `build_pipeline` again, which builds new filter objects. The key store, the suspicion log and the fingerprint windows all live on `FilterDependencies`, so passing the same instance carries that state across the reload; a fresh one would hand the new filters empty windows and quietly disable duplicate detection for a whole retention period. Each of them is injectable, so a durable or shared implementation can replace the in-memory default.
+
+| Mode | Effect |
+|---|---|
+| `off` | The filter does not run at all |
+| `shadow` | Runs and logs what it *would* reject; never blocks. **The default for anything not listed.** |
+| `enforce` | A REJECT stops the stage |
 
 ## Decisions (issue #13)
 

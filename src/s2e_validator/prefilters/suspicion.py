@@ -1,4 +1,7 @@
-"""Append-only record of patterns worth investigating later.
+"""Record of patterns worth investigating later.
+
+Events are only ever added, except that a submission the stage rejects at
+commit time has its own events retracted (see `SuspicionLog.retract`).
 
 Separate from `ImageKeyStore` on purpose: that store answers "has this key been
 claimed?", while this one accumulates evidence about accounts across campaigns.
@@ -37,11 +40,25 @@ class SuspicionLog(Protocol):
     def record(self, event: DuplicateImageEvent) -> None:
         """Record one event.
 
-        **Must be idempotent on `(image_key, duplicate_submission_id)`.** The
-        same match is reported from both `check` and `commit`, and a retried
-        `commit` reports it again; one submission duplicating one photo is a
-        single fact, and counting it twice would inflate an account's record.
-        Any durable implementation needs that key anyway.
+        **Must be idempotent on `(image_key, duplicate_submission_id)`.** Both
+        duplicate filters report the same match, and a retried `commit`
+        reports it again; one submission duplicating one photo is a single
+        fact, and counting it twice would inflate an account's record. Any
+        durable implementation needs that key anyway.
+        """
+        ...
+
+    def retract(self, image_key: str, duplicate_submission_id: str) -> None:
+        """Withdraw what `record` wrote for this submission and photo.
+
+        Called only from `rollback`, when the stage rejects a submission after
+        its match was recorded (a claim race lost at commit time). A record has
+        to describe a contribution that stood: the corrected resubmission comes
+        back under a new id and is recorded then, so keeping this one would
+        count the same photo twice. Safe to call when nothing was recorded.
+
+        A durable store may keep history by appending a retraction rather than
+        deleting; what matters is that the event no longer counts.
         """
         ...
 
@@ -84,4 +101,21 @@ class InMemorySuspicionLog:
             event.original_submission_id,
             event.duplicate_user_id,
             event.duplicate_submission_id,
+        )
+
+    def retract(self, image_key: str, duplicate_submission_id: str) -> None:
+        fact = (image_key, duplicate_submission_id)
+        with self._lock:
+            if fact not in self._seen:
+                return
+            self._seen.discard(fact)
+            self._events = [
+                event
+                for event in self._events
+                if (event.image_key, event.duplicate_submission_id) != fact
+            ]
+        logger.info(
+            "duplicate_image_retracted key=%s duplicate=%s",
+            image_key[:16],
+            duplicate_submission_id,
         )

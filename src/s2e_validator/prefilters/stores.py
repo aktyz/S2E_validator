@@ -45,6 +45,8 @@ class ImageKeyStore(Protocol):
 
     def add(self, seen: SeenImage) -> DuplicateClaimResult: ...
 
+    def release(self, key: str, submission_id: str) -> bool: ...
+
 
 class InMemoryImageKeyStore:
     """Process-local store with a time-to-live.
@@ -88,6 +90,21 @@ class InMemoryImageKeyStore:
                 return DuplicateClaimResult(existing, claimed=False)
             self._entries[seen.key] = seen
             return DuplicateClaimResult(seen, claimed=True)
+
+    def release(self, key: str, submission_id: str) -> bool:
+        """Give a key back, but only to the submission that claimed it.
+
+        The stage calls this when a later filter rejects at commit time, so a
+        rejected submission leaves nothing claimed and can be fixed and sent
+        again. The ownership test is what makes it safe: a submission that lost
+        the race never holds the key, so it cannot release someone else's.
+        """
+        with self._lock:
+            existing = self._entries.get(key)
+            if existing is None or existing.submission_id != submission_id:
+                return False
+            del self._entries[key]
+            return True
 
     def purge_expired(self) -> int:
         with self._lock:

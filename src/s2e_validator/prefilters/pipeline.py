@@ -52,6 +52,7 @@ class PreFilterPipeline:
         duplicates = {n for n in names if names.count(n) > 1}
         if duplicates:
             raise ValueError(f"Duplicate filter names: {sorted(duplicates)}")
+        self._by_name = {f.name: f for f in self._filters}
         self._config = config or PipelineConfig()
 
     @property
@@ -59,6 +60,7 @@ class PreFilterPipeline:
         return tuple(f.name for f in self._filters)
 
     def run_pre_filters(self, interaction: Interaction) -> PipelineResult:
+        """Run every enabled filter, then let the survivors claim their state."""
         records: list[FilterRecord] = []
 
         for prefilter in self._filters:
@@ -69,15 +71,96 @@ class PreFilterPipeline:
             record = self._run_one(prefilter, mode, interaction)
             records.append(record)
 
-            if (
-                mode is FilterMode.ENFORCE
-                and record.result is not None
-                and record.result.verdict is Verdict.REJECT
-            ):
-                # Fail fast: later (more expensive) filters never run.
+            if self._is_enforced_reject(record):
+                # Fail fast: later (more expensive) filters never run, and
+                # nothing is committed — a rejected submission must not claim a
+                # photo it may want to resubmit after a fix.
                 return self._build_result(records, decided_by=record)
 
-        return self._build_result(records, decided_by=None)
+        return self._commit(interaction, records)
+
+    def _commit(self, interaction: Interaction, records: list[FilterRecord]) -> PipelineResult:
+        """Let each filter that ran claim what it needs, now the stage has passed.
+
+        A filter may return a revised verdict here: two submissions can both pass
+        `check` before either commits, and only one can win a contested claim.
+        When that revised verdict is an enforced REJECT, every filter that
+        already committed is rolled back, so "a rejected submission claims
+        nothing" holds here exactly as it does for a REJECT during `check`.
+        """
+        committed: list[FilterRecord] = []
+        done: list[PreFilter] = []
+        for index, record in enumerate(records):
+            prefilter = self._by_name[record.filter_name]
+            # Listed before the call, not after: a commit that raised halfway
+            # may still have claimed something, and rollback is safe on a filter
+            # that committed nothing.
+            done.append(prefilter)
+            try:
+                revision = prefilter.commit(interaction)
+            except Exception as exc:  # noqa: BLE001 - same fail-open rule as check()
+                logger.exception(
+                    "prefilter_commit_error filter=%s submission=%s",
+                    prefilter.name,
+                    interaction.submission_id,
+                )
+                committed.append(
+                    FilterRecord(
+                        record.filter_name,
+                        record.mode,
+                        record.result,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                )
+                continue
+
+            if revision is None:
+                committed.append(record)
+                continue
+
+            logger.info(
+                "prefilter_commit_revision filter=%s submission=%s verdict=%s reason=%s",
+                prefilter.name,
+                interaction.submission_id,
+                revision.verdict.value,
+                revision.reason_code,
+            )
+            revised = FilterRecord(record.filter_name, record.mode, revision)
+            committed.append(revised)
+            if self._is_enforced_reject(revised):
+                self._rollback(done, interaction)
+                # The later filters already ran their `check`; only their commit
+                # is skipped. Keep those results, or shadow mode loses the
+                # evidence it exists to collect.
+                return self._build_result(committed + records[index + 1 :], decided_by=revised)
+
+        return self._build_result(committed, decided_by=None)
+
+    @staticmethod
+    def _rollback(done: Iterable[PreFilter], interaction: Interaction) -> None:
+        """Undo the commits made before a later filter rejected.
+
+        Fail-open, like `check`: a filter that cannot undo its own claim must
+        not turn a clean rejection into a crashed stage. The leftover claim is
+        logged, since it is the one thing that could block a resubmission.
+        """
+        for prefilter in done:
+            try:
+                prefilter.rollback(interaction)
+            except Exception:  # noqa: BLE001 - same fail-open rule as check()
+                logger.exception(
+                    "prefilter_rollback_error filter=%s submission=%s",
+                    prefilter.name,
+                    interaction.submission_id,
+                )
+
+    @staticmethod
+    def _is_enforced_reject(record: FilterRecord) -> bool:
+        return (
+            record.mode is FilterMode.ENFORCE
+            and record.result is not None
+            and record.result.verdict is Verdict.REJECT
+        )
 
     def _run_one(
         self, prefilter: PreFilter, mode: FilterMode, interaction: Interaction

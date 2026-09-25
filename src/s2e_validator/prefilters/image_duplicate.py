@@ -93,7 +93,9 @@ class ImageExactDuplicateFilter(PreFilter):
         if seen.user_id == interaction.user_id:
             return self._rejected(REASON_SAME_USER, identity, seen)
 
-        self._log_cross_user_match(interaction, identity, seen)
+        # Not logged here: `check` only reads. A submission a later filter
+        # rejects must not leave a fraud record behind, and `commit` records
+        # every cross-user match that survives the stage.
         return self._text_only(interaction, identity, seen)
 
     def commit(self, interaction: Interaction) -> PreFilterResult | None:
@@ -126,6 +128,21 @@ class ImageExactDuplicateFilter(PreFilter):
             return self._text_only(interaction, identity, claim.seen)
         # Same-user repeat that slipped past check(); report what check() would.
         return self._rejected(REASON_SAME_USER, identity, claim.seen)
+
+    def rollback(self, interaction: Interaction) -> None:
+        """Give back the keys this submission claimed, and withdraw its match.
+
+        `release` checks ownership, so a submission that lost a claim race
+        cannot take the winner's key away. The suspicion event is keyed on this
+        submission's id, so retracting it touches no one else's record.
+        """
+        identity = image_identity(interaction.image)
+        self._store.release(
+            user_scoped_key(identity, interaction.user_id), interaction.submission_id
+        )
+        if identity.is_upload:
+            self._store.release(identity.key, interaction.submission_id)
+            self._suspicion_log.retract(identity.key, interaction.submission_id)
 
     def _repeat_reason(self, identity: ImageIdentity, interaction: Interaction) -> str:
         """Why this user's second attempt at one photo is refused.

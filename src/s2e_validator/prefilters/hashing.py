@@ -18,8 +18,6 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from enum import Enum
 
-from PIL import Image
-
 from .interaction import ExistingImage, ImageInput, NewImage
 from .text import canonical
 
@@ -143,6 +141,11 @@ def dhash(data: bytes, size: int = 8, max_pixels: int = DEFAULT_MAX_PIXELS) -> i
 
 
 def _dhash(data: bytes, size: int, max_pixels: int) -> int:
+    # Imported here, not at module scope: the identity half of this module
+    # (`image_identity`, `text_contribution_key`) needs only hashlib, and
+    # settlement should not have to load an image library to compute a key.
+    from PIL import Image
+
     try:
         with Image.open(io.BytesIO(data)) as image:
             width, height = image.size

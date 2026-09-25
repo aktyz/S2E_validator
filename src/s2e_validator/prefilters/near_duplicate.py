@@ -149,10 +149,9 @@ class ImageNearDuplicateFilter(PreFilter):
         match, same_user = self._classify(interaction, fingerprint)
         if match is None:
             return PreFilterResult.passed()
-        if not same_user:
-            # Recorded at detection, as the exact filter does: the copy happened
-            # even if a later filter rejects this submission.
-            self._log_match(interaction, match)
+        # Not logged here: `check` only reads. `commit` records every match that
+        # survives the stage, so a submission rejected by a later filter leaves
+        # no fraud record against the account.
         return self._verdict(match, same_user)
 
     def commit(self, interaction: Interaction) -> PreFilterResult | None:
@@ -185,6 +184,16 @@ class ImageNearDuplicateFilter(PreFilter):
 
         self._log_match(interaction, match)
         return self._verdict(match, same_user)
+
+    def rollback(self, interaction: Interaction) -> None:
+        """Take this submission's fingerprints back out, and withdraw its match."""
+        with self._window.locked():
+            self._window.remove(user_bucket(interaction.user_id), interaction.submission_id)
+            self._window.remove(GLOBAL_BUCKET, interaction.submission_id)
+        if isinstance(interaction.image, NewImage):
+            self._suspicion_log.retract(
+                image_identity(interaction.image).key, interaction.submission_id
+            )
 
     def _fingerprint(self, interaction: Interaction) -> int | str | None:
         """The photo's dHash, a reason it could not be taken, or None if there
@@ -313,6 +322,12 @@ class TextNearDuplicateFilter(PreFilter):
             if prepared.length >= self._settings.min_cross_user_chars:
                 self._window.add(GLOBAL_BUCKET, entry)
         return None
+
+    def rollback(self, interaction: Interaction) -> None:
+        """Take this caption's fingerprint back out of both buckets."""
+        with self._window.locked():
+            self._window.remove(user_bucket(interaction.user_id), interaction.submission_id)
+            self._window.remove(GLOBAL_BUCKET, interaction.submission_id)
 
     def _prepare(self, interaction: Interaction) -> _PreparedCaption | PreFilterResult:
         """The expensive part, lock-free: fingerprint, photo key, length."""

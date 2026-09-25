@@ -127,6 +127,27 @@ class HashWindow:
                         break
             return best
 
+    def remove(self, bucket: BucketKey, submission_id: str) -> int:
+        """Drop everything one submission put in a bucket; returns how many.
+
+        Used when a later filter rejects at commit time: a rejected submission
+        must not leave a fingerprint behind that its own corrected resubmission
+        would then match against. A submission can hold more than one entry in a
+        bucket (a text-only downgrade also records the original's fingerprint),
+        so every one of them goes.
+        """
+        with self._lock:
+            entries = self._buckets.get(bucket)
+            if not entries:
+                return 0
+            kept = [entry for entry in entries if entry.submission_id != submission_id]
+            removed = len(entries) - len(kept)
+            if kept:
+                self._buckets[bucket] = kept
+            else:
+                del self._buckets[bucket]
+            return removed
+
     def purge_expired(self) -> int:
         """Expire every bucket now. Normally this happens a bucket at a time."""
         with self._lock:

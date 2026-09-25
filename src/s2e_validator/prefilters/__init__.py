@@ -13,6 +13,13 @@ from .near_duplicate import (
     TextNearDuplicateSettings,
 )
 from .pipeline import FilterRecord, PipelineResult, PreFilterPipeline
+from .registry import (
+    FILTER_BUILDERS,
+    FilterDependencies,
+    build_filters,
+    build_pipeline,
+    load_config,
+)
 from .result import PreFilterResult, Verdict
 from .settings import settings_from_dict
 from .stores import DuplicateClaimResult, ImageKeyStore, InMemoryImageKeyStore, SeenImage
@@ -20,36 +27,30 @@ from .suspicion import DuplicateImageEvent, InMemorySuspicionLog, SuspicionLog
 from .text_format import TextFormatFilter, TextFormatSettings
 from .windows import GLOBAL_BUCKET, HashEntry, HashMatch, HashWindow, user_bucket
 
+# Sorted, so adding a name is a one-line diff wherever it belongs.
 __all__ = [
     "DuplicateClaimResult",
     "DuplicateImageEvent",
     "ExistingImage",
+    "FILTER_BUILDERS",
+    "FilterDependencies",
     "FilterMode",
     "FilterRecord",
-    "ImageExactDuplicateFilter",
-    "ImageFormatFilter",
-    "ImageFormatSettings",
     "GLOBAL_BUCKET",
     "HashEntry",
     "HashMatch",
     "HashWindow",
+    "ImageExactDuplicateFilter",
+    "ImageFormatFilter",
+    "ImageFormatSettings",
     "ImageIdentity",
     "ImageInput",
     "ImageKeyStore",
     "ImageKind",
     "ImageNearDuplicateFilter",
     "ImageNearDuplicateSettings",
-    "TextNearDuplicateFilter",
-    "TextNearDuplicateSettings",
-    "dhash",
-    "hamming",
-    "simhash",
     "InMemoryImageKeyStore",
     "InMemorySuspicionLog",
-    "SuspicionLog",
-    "TextFormatFilter",
-    "TextFormatSettings",
-    "settings_from_dict",
     "Interaction",
     "NewImage",
     "NoOpFilter",
@@ -59,7 +60,19 @@ __all__ = [
     "PreFilterPipeline",
     "PreFilterResult",
     "SeenImage",
+    "SuspicionLog",
+    "TextFormatFilter",
+    "TextFormatSettings",
+    "TextNearDuplicateFilter",
+    "TextNearDuplicateSettings",
     "Verdict",
+    "build_filters",
+    "build_pipeline",
+    "dhash",
+    "hamming",
     "image_identity",
+    "load_config",
+    "settings_from_dict",
+    "simhash",
     "user_bucket",
 ]
