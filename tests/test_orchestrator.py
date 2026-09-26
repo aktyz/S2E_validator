@@ -23,24 +23,7 @@ from s2e_validator.prefilters import (
     load_config,
 )
 
-from conftest import make_interaction
-from helpers import CASTLE, photo, recompressed
-
-ENFORCE_ALL = PipelineConfig(
-    default_mode=FilterMode.ENFORCE,
-    settings={"text_near_duplicate": {"min_cross_user_chars": 20}},
-)
-
-
-def big_photo(seed: int = 1) -> bytes:
-    """Phone-sized, so it clears the image_format minimum even after resizing."""
-    return photo(seed, width=800, height=600)
-
-
-def good(**overrides):
-    fields = {"image": NewImage(big_photo()), "text": CASTLE}
-    fields.update(overrides)
-    return make_interaction(**fields)
+from helpers import CASTLE, ENFORCE_ALL, big_photo, good, recompressed
 
 
 @pytest.fixture
@@ -170,7 +153,7 @@ class RejectsOnCommit(PreFilter):
     cost_rank = 99
 
     def __init__(self, cost_rank: int = 99, only: str | None = None):
-        # Instance attribute shadows the ClassVar, as conftest's StubFilter does.
+        # Instance attribute shadows the ClassVar, as helpers.StubFilter does.
         self.cost_rank = cost_rank
         #: Reject just this submission id, so an earlier original can stand.
         self._only = only

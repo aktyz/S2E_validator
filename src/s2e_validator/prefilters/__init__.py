@@ -6,13 +6,23 @@ from .hashing import ImageIdentity, ImageKind, dhash, hamming, image_identity, s
 from .image_duplicate import ImageExactDuplicateFilter
 from .image_format import ImageFormatFilter, ImageFormatSettings
 from .interaction import ExistingImage, ImageInput, Interaction, NewImage
+from .metrics import (
+    AnomalySettings,
+    FilterStats,
+    RateMonitor,
+    StageMetrics,
+    StageSnapshot,
+    error_rate_monitor,
+    reject_rate_monitor,
+    render_snapshot,
+)
 from .near_duplicate import (
     ImageNearDuplicateFilter,
     ImageNearDuplicateSettings,
     TextNearDuplicateFilter,
     TextNearDuplicateSettings,
 )
-from .pipeline import FilterRecord, PipelineResult, PreFilterPipeline
+from .pipeline import FilterRecord, MetricsSink, PipelineResult, PreFilterPipeline
 from .registry import (
     FILTER_BUILDERS,
     FilterDependencies,
@@ -29,6 +39,7 @@ from .windows import GLOBAL_BUCKET, HashEntry, HashMatch, HashWindow, user_bucke
 
 # Sorted, so adding a name is a one-line diff wherever it belongs.
 __all__ = [
+    "AnomalySettings",
     "DuplicateClaimResult",
     "DuplicateImageEvent",
     "ExistingImage",
@@ -36,6 +47,7 @@ __all__ = [
     "FilterDependencies",
     "FilterMode",
     "FilterRecord",
+    "FilterStats",
     "GLOBAL_BUCKET",
     "HashEntry",
     "HashMatch",
@@ -52,6 +64,7 @@ __all__ = [
     "InMemoryImageKeyStore",
     "InMemorySuspicionLog",
     "Interaction",
+    "MetricsSink",
     "NewImage",
     "NoOpFilter",
     "PipelineConfig",
@@ -59,7 +72,10 @@ __all__ = [
     "PreFilter",
     "PreFilterPipeline",
     "PreFilterResult",
+    "RateMonitor",
     "SeenImage",
+    "StageMetrics",
+    "StageSnapshot",
     "SuspicionLog",
     "TextFormatFilter",
     "TextFormatSettings",
@@ -69,9 +85,12 @@ __all__ = [
     "build_filters",
     "build_pipeline",
     "dhash",
+    "error_rate_monitor",
     "hamming",
     "image_identity",
     "load_config",
+    "reject_rate_monitor",
+    "render_snapshot",
     "settings_from_dict",
     "simhash",
     "user_bucket",

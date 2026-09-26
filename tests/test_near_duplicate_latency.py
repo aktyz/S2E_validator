@@ -29,8 +29,7 @@ from s2e_validator.prefilters import (
 from s2e_validator.prefilters.hashing import _DHASH_CACHE
 from s2e_validator.prefilters.stores import utc_now
 
-from conftest import make_interaction
-from helpers import CASTLE, phone_photo, photo
+from helpers import CASTLE, make_interaction, phone_photo, photo
 
 pytestmark = pytest.mark.slow
 

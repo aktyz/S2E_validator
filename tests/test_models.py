@@ -15,7 +15,7 @@ from s2e_validator.prefilters import (
     Verdict,
 )
 
-from conftest import make_interaction
+from helpers import make_interaction
 
 
 class TestPreFilterResult:

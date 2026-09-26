@@ -23,7 +23,8 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 | #14 | `TextFormatFilter`, `ImageFormatFilter`, structural checks | Merged |
 | #15 | `ImageExactDuplicateFilter`, exact-duplicate photos | Merged |
 | #16 | `ImageNearDuplicateFilter`, `TextNearDuplicateFilter`, near-duplicates | Merged |
-| #23 | Orchestrator: config-built stage, commit phase | This PR |
+| #23 | Orchestrator: config-built stage, commit phase | Merged |
+| #24 | `StageMetrics`: per-filter counts, latency, shadow visibility | This PR |
 
 ## Run the tests
 
@@ -57,6 +58,7 @@ Requires Python 3.11+. One runtime dependency: **Pillow**, for decoding uploaded
 | `src/s2e_validator/prefilters/windows.py` | `HashWindow`: bucketed, TTL-bounded fingerprint window (#16) |
 | `src/s2e_validator/prefilters/text.py` | `normalize()` and `canonical()`, shared by every filter that reads a description |
 | `src/s2e_validator/prefilters/registry.py` | `build_pipeline()`, `load_config()`: the stage assembled from config (#23) |
+| `src/s2e_validator/prefilters/metrics.py` | `StageMetrics`: per-filter counts, latency, reject rate, judge calls saved (#24) |
 
 ## Adding a filter
 
@@ -320,6 +322,59 @@ Filters run in `cost_rank` order — text checks, image checks, exact hashing, t
 | `off` | The filter does not run at all |
 | `shadow` | Runs and logs what it *would* reject; never blocks. **The default for anything not listed.** |
 | `enforce` | A REJECT stops the stage |
+
+## Metrics (issue #24)
+
+```python
+metrics = StageMetrics()
+pipeline = build_pipeline(load_config("config/example_campaign.json"), metrics=metrics)
+...
+print(render_snapshot(metrics.snapshot()))
+```
+
+```
+filter                   checked   pass   flag  reject  shadow  err  mean ms   max ms
+-----------------------------------------------------------------------------------
+text_format                 1204   1131      0      73       0    0     0.04     0.31
+image_format                1131   1128      0       3       0    0     3.10    11.87
+image_exact_duplicate       1128   1109     12       7       0    0     0.09     0.44
+image_near_duplicate        1121   1106      9       0       6    0     3.44    12.02
+text_near_duplicate         1121   1108      0       0      13    0     2.18     9.51
+
+submissions=1204 passed=1121 rejected=83 flagged=21 reject_rate=6.9%
+judge_calls_saved=83 (~$0.33 est.) mean_stage=6.2ms
+```
+
+*(the shape of the output; the numbers are illustrative until real traffic runs through it, but they follow the pipeline's rules: only an enforced reject removes a submission, so flags and shadow rejections still reach every later filter)*
+
+| Column | Meaning |
+|---|---|
+| `pass` | Nothing found. Per filter this **excludes** flagged submissions; the stage's `passed` counts everything that went on to the judge, flagged or not |
+| `reject` | Rejections that actually stopped a submission: enforcing filters only |
+| `shadow` | **What a shadow filter would have rejected.** The number to read before promoting a filter to `enforce` |
+| `flag` | Soft signals passed to the judge as context |
+| `err` | The filter crashed; the submission passed anyway (fail open) |
+
+A record can be an error *and* a verdict: when `commit` crashes after `check` returned one, both count, so a row can add up to more than `checked`.
+
+Latency covers both halves of a filter's work, `check` and `commit`, so a filter whose cost sits in its claim step is not reported as free.
+
+**Reason codes are counted by what they did**, as `(outcome, code)` with outcome `reject`, `shadow` or `flag`, so "what are we rejecting, and what would we reject?" is answerable per campaign. They are counts, not a trail: tracing one contributor's appeal needs the submission's own `PipelineResult`, which the metrics do not keep.
+
+**Snapshots are copies.** `snapshot()` returns frozen data the collector never touches again, so a snapshot taken earlier never changes and can be read or serialised on any thread.
+
+**Judge calls saved.** Every enforced rejection is a judge call not made. The dollar figure multiplies by `DEFAULT_JUDGE_CALL_USD` (0.004): an operations estimate for reading the table, a placeholder until a judge model is chosen, and not an input to any budget, fee or reward.
+
+**Alerting, two monitors.** Each `RateMonitor` watches one rate over a rolling window and logs one warning when it crosses its ceiling and one when it recovers, never one per submission:
+
+| Monitor | Counts a submission when | Default | Why |
+|---|---|---|---|
+| `reject_rate` | an enforced filter rejected it **or a shadow filter would have** | above 50% of the last 200 | A spike usually means a broken filter, not more farming. Counting shadow rejections is what makes it work in the all-shadow default |
+| `error_rate` | any filter crashed on it | above 5% of the last 200 | A crash fails open into a PASS, so it pushes the reject rate *down*; only a separate monitor sees it |
+
+`AnomalySettings` refuses combinations that could never fire, such as a minimum larger than the window or a ceiling of 100%. Monitors log only after every lock is released, so a log handler can safely read the metrics, for example to attach the current table to an alert. A metrics sink can never break the stage: if `observe` raises, the error is logged and the result is still returned, because by then every filter has committed its claims.
+
+`snapshot().to_dict()` is JSON-ready for a dashboard; `render_snapshot(snapshot)` is the table above.
 
 ## Decisions (issue #13)
 

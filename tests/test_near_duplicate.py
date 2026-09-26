@@ -34,8 +34,7 @@ from s2e_validator.prefilters.near_duplicate import (
     REASON_TEXT_UNCOMPARABLE,
 )
 
-from conftest import make_interaction
-from helpers import CASTLE, CASTLE_NO_DIACRITICS, CASTLE_TYPO, PIEROGI, photo, recompressed
+from helpers import CASTLE, CASTLE_NO_DIACRITICS, CASTLE_TYPO, PIEROGI, make_interaction, photo, recompressed
 
 
 def run(duplicate_filter, **overrides):

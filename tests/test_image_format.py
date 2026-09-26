@@ -22,7 +22,7 @@ from s2e_validator.prefilters.image_format import (
     REASON_UNDECODABLE,
 )
 
-from conftest import make_interaction
+from helpers import make_interaction
 
 
 @functools.lru_cache(maxsize=None)

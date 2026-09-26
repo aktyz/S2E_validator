@@ -22,7 +22,7 @@ from .near_duplicate import (
     TextNearDuplicateFilter,
     TextNearDuplicateSettings,
 )
-from .pipeline import PreFilterPipeline
+from .pipeline import MetricsSink, PreFilterPipeline
 from .stores import ImageKeyStore, InMemoryImageKeyStore, utc_now
 from .suspicion import InMemorySuspicionLog, SuspicionLog
 from .text_format import TextFormatFilter, TextFormatSettings
@@ -147,11 +147,17 @@ def build_filters(
 
 
 def build_pipeline(
-    config: PipelineConfig | None = None, dependencies: FilterDependencies | None = None
+    config: PipelineConfig | None = None,
+    dependencies: FilterDependencies | None = None,
+    metrics: MetricsSink | None = None,
 ) -> PreFilterPipeline:
-    """The pre-filter stage, ready to run."""
+    """The pre-filter stage, ready to run.
+
+    Pass a `StageMetrics` as `metrics` to collect per-filter counts and latency
+    (#24); without one the stage runs unmeasured.
+    """
     resolved = config or PipelineConfig()
-    return PreFilterPipeline(build_filters(resolved, dependencies), resolved)
+    return PreFilterPipeline(build_filters(resolved, dependencies), resolved, metrics)
 
 
 def load_config(path: str | Path) -> PipelineConfig:

@@ -6,8 +6,38 @@ from __future__ import annotations
 import functools
 import io
 import random
+from collections.abc import Callable
+from datetime import datetime, timezone
 
 from PIL import Image
+
+from s2e_validator.prefilters import (
+    FilterMode,
+    Interaction,
+    NewImage,
+    PipelineConfig,
+    PreFilter,
+    PreFilterResult,
+)
+
+
+def make_interaction(**overrides) -> Interaction:
+    """One submission with sensible defaults; override any field by name.
+
+    Lives here rather than in conftest: pytest advises against importing
+    conftest, and shared helpers should not depend on it.
+    """
+    fields = {
+        "submission_id": "sub-1",
+        "campaign_id": "bielik-mvp",
+        "user_id": "user-1",
+        "image": NewImage(b"\xff\xd8fake-jpeg", "image/jpeg"),
+        "text": "Pomnik Neptuna w Gdańsku",
+        "submitted_at": datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc),
+    }
+    fields.update(overrides)
+    return Interaction(**fields)
+
 
 CASTLE = "Zamek w Malborku widziany od strony Nogatu, ceglane mury w porannym słońcu"
 #: One typo away: the cheapest way to dodge exact matching.
@@ -55,3 +85,50 @@ def phone_photo(seed: int = 1, width: int = 4032, height: int = 3024) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=90)
     return buffer.getvalue()
+
+
+# -- The whole stage, used by the orchestrator and metrics tests ----------------
+
+#: Every filter enforcing, with the cross-user caption bar lowered so the short
+#: Polish sample captions above can trip it.
+ENFORCE_ALL = PipelineConfig(
+    default_mode=FilterMode.ENFORCE,
+    settings={"text_near_duplicate": {"min_cross_user_chars": 20}},
+)
+
+
+def big_photo(seed: int = 1) -> bytes:
+    """Phone-sized, so it clears the image_format minimum even after resizing."""
+    return photo(seed, width=800, height=600)
+
+
+def good(**overrides) -> Interaction:
+    """A submission every filter passes, unless an override says otherwise."""
+    fields = {"image": NewImage(big_photo()), "text": CASTLE}
+    fields.update(overrides)
+    return make_interaction(**fields)
+
+
+class StubFilter(PreFilter):
+    """Test filter that returns a fixed result and records whether it ran."""
+
+    # Placeholders satisfying PreFilter.__init_subclass__; each instance
+    # overrides both in __init__.
+    name = "stub"
+    cost_rank = 10
+
+    def __init__(
+        self,
+        name: str,
+        cost_rank: int,
+        result: PreFilterResult | Callable[[], PreFilterResult],
+    ):
+        # Instance attributes shadow the ClassVars, which is fine for a test double.
+        self.name = name
+        self.cost_rank = cost_rank
+        self._result = result
+        self.calls = 0
+
+    def check(self, interaction: Interaction) -> PreFilterResult:
+        self.calls += 1
+        return self._result() if callable(self._result) else self._result

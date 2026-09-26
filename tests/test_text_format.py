@@ -14,7 +14,7 @@ from s2e_validator.prefilters.text_format import (
     REASON_TOO_SHORT,
 )
 
-from conftest import make_interaction
+from helpers import make_interaction
 
 
 def check(text: str, settings: TextFormatSettings | None = None):

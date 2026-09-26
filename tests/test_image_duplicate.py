@@ -23,7 +23,7 @@ from s2e_validator.prefilters.image_duplicate import (
     REASON_TEXT_ONLY,
 )
 
-from conftest import make_interaction
+from helpers import make_interaction
 
 PHOTO = NewImage(b"\xff\xd8 castle photo bytes", "image/jpeg")
 OTHER_PHOTO = NewImage(b"\xff\xd8 pierogi photo bytes", "image/jpeg")

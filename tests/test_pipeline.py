@@ -11,7 +11,7 @@ from s2e_validator.prefilters import (
     Verdict,
 )
 
-from conftest import StubFilter
+from helpers import StubFilter
 
 PASS = PreFilterResult.passed()
 REJECT = PreFilterResult.rejected("DUPLICATE_IMAGE", confidence=1.0)
