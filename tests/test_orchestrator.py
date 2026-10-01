@@ -47,6 +47,7 @@ class TestCleanSubmission:
             "image_exact_duplicate",
             "image_near_duplicate",
             "text_near_duplicate",
+            "face_detection",
         )
 
     def test_pooled_photo_description_passes(self, pipeline):
@@ -240,16 +241,17 @@ class TestCommitTimeRejectClaimsNothing:
         """Rejecting mid-commit skips the later filters' commit, but their check
         already ran. Dropping those records would hide exactly what shadow mode
         exists to collect."""
-        # Rank 25: after image_exact_duplicate (20), before both near-duplicate
-        # filters (30, 32), so there are later records to keep.
+        # Rank 25: after image_exact_duplicate (20), before the near-duplicate
+        # filters (30, 32) and face detection (40), so there are later records to keep.
         outcome = stage_rejecting_on_commit(cost_rank=25).run_pre_filters(good())
 
         assert outcome.verdict is Verdict.REJECT
         assert outcome.decided_by == "rejects_on_commit"
         assert len(outcome.records) == len(FILTER_BUILDERS) + 1
-        assert [r.filter_name for r in outcome.records][-2:] == [
+        assert [r.filter_name for r in outcome.records][-3:] == [
             "image_near_duplicate",
             "text_near_duplicate",
+            "face_detection",
         ]
 
 
@@ -339,7 +341,7 @@ class TestConfigControlsEverything:
 
     def test_config_naming_an_unknown_filter_fails_loudly(self):
         with pytest.raises(ValueError, match="unknown filters"):
-            build_filters(PipelineConfig(modes={"face_detection": FilterMode.ENFORCE}))
+            build_filters(PipelineConfig(modes={"profanity_scan": FilterMode.ENFORCE}))
 
     def test_the_shipped_example_config_builds_a_pipeline(self):
         """The example in the README is loaded here, so it cannot rot."""

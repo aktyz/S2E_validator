@@ -16,6 +16,10 @@ from .result import PreFilterResult, Verdict
 logger = logging.getLogger(__name__)
 
 
+class PreflightFailed(RuntimeError):
+    """An enabled filter cannot run. Raised at startup, never per submission."""
+
+
 class MetricsSink(Protocol):
     """Anything that wants to see every stage outcome, e.g. StageMetrics (#24)."""
 
@@ -74,6 +78,22 @@ class PreFilterPipeline:
     @property
     def filter_names(self) -> tuple[str, ...]:
         return tuple(f.name for f in self._filters)
+
+    def preflight(self) -> None:
+        """Check every enabled filter can run. Call once before serving.
+
+        Filters that are off are skipped: a filter nobody runs may lack its
+        model. Raises PreflightFailed naming the first filter that cannot run.
+        """
+        for prefilter in self._filters:
+            if self._config.mode_for(prefilter.name) is FilterMode.OFF:
+                continue
+            try:
+                prefilter.preflight()
+            except Exception as exc:  # noqa: BLE001 - reported, with the filter's name
+                raise PreflightFailed(
+                    f"{prefilter.name} cannot run: {type(exc).__name__}: {exc}"
+                ) from exc
 
     def run_pre_filters(self, interaction: Interaction) -> PipelineResult:
         """Run every enabled filter, then let the survivors claim their state."""

@@ -14,6 +14,7 @@ from typing import Any
 
 from .base import PreFilter
 from .config import PipelineConfig
+from .face_detection import FaceDetectionFilter, FaceDetectionSettings
 from .image_duplicate import ImageExactDuplicateFilter
 from .image_format import ImageFormatFilter, ImageFormatSettings
 from .near_duplicate import (
@@ -107,6 +108,10 @@ def _image_near_duplicate(settings: Mapping[str, Any], deps: FilterDependencies)
     )
 
 
+def _face_detection(settings: Mapping[str, Any], _: FilterDependencies) -> PreFilter:
+    return FaceDetectionFilter(FaceDetectionSettings.from_dict(settings))
+
+
 def _text_near_duplicate(settings: Mapping[str, Any], deps: FilterDependencies) -> PreFilter:
     parsed = TextNearDuplicateSettings.from_dict(settings)
     return TextNearDuplicateFilter(
@@ -123,6 +128,7 @@ FILTER_BUILDERS: dict[str, FilterBuilder] = {
     ImageExactDuplicateFilter.name: _image_exact_duplicate,
     ImageNearDuplicateFilter.name: _image_near_duplicate,
     TextNearDuplicateFilter.name: _text_near_duplicate,
+    FaceDetectionFilter.name: _face_detection,
 }
 
 

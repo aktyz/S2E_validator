@@ -24,7 +24,8 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 | #15 | `ImageExactDuplicateFilter`, exact-duplicate photos | Merged |
 | #16 | `ImageNearDuplicateFilter`, `TextNearDuplicateFilter`, near-duplicates | Merged |
 | #23 | Orchestrator: config-built stage, commit phase | Merged |
-| #24 | `StageMetrics`: per-filter counts, latency, shadow visibility | This PR |
+| #24 | `StageMetrics`: per-filter counts, latency, shadow visibility | Merged |
+| #21 | `FaceDetectionFilter`: the campaign's no-faces rule, YuNet | This PR |
 
 ## Run the tests
 
@@ -37,7 +38,7 @@ python -m pytest -m slow            # latency budgets, opt-in
 
 The `slow` tests assert on wall-clock time, which flakes on a shared CI runner, so they are left out of the default run and out of CI. Run them deliberately, on an idle machine, when a change could affect the hot path.
 
-Requires Python 3.11+. One runtime dependency: **Pillow**, for decoding uploaded photos (#14); perceptual hashing (#16) and face detection (#21) build on it too.
+Requires Python 3.11+. Runtime dependencies: **Pillow** (decoding photos, perceptual hashing) and **opencv-python-headless** with **numpy** (face detection). The YuNet model ships in `models/`, so there is no download step; see `models/README.md`.
 
 ## Layout
 
@@ -58,6 +59,7 @@ Requires Python 3.11+. One runtime dependency: **Pillow**, for decoding uploaded
 | `src/s2e_validator/prefilters/windows.py` | `HashWindow`: bucketed, TTL-bounded fingerprint window (#16) |
 | `src/s2e_validator/prefilters/text.py` | `normalize()` and `canonical()`, shared by every filter that reads a description |
 | `src/s2e_validator/prefilters/registry.py` | `build_pipeline()`, `load_config()`: the stage assembled from config (#23) |
+| `src/s2e_validator/prefilters/face_detection.py` | `FaceDetectionFilter` (#21), YuNet detector |
 | `src/s2e_validator/prefilters/metrics.py` | `StageMetrics`: per-filter counts, latency, reject rate, judge calls saved (#24) |
 
 ## Adding a filter
@@ -322,6 +324,32 @@ Filters run in `cost_rank` order — text checks, image checks, exact hashing, t
 | `off` | The filter does not run at all |
 | `shadow` | Runs and logs what it *would* reject; never blocks. **The default for anything not listed.** |
 | `enforce` | A REJECT stops the stage |
+
+## Face detection (issue #21)
+
+Faces are excluded by the campaign's own rules, so this filter enforces a **client rule**, not a quality judgement.
+
+| Setting | Default | Why |
+|---|---|---|
+| `action` | `reject` | The campaign bans faces outright. Set `flag` to send the decision to the judge instead. |
+| `score_threshold` | `0.6` | YuNet confidence below this is ignored |
+| `min_area_ratio` | `0.0` | Catches every face, including a distant bystander. Raise it if only the photo's subject matters. |
+| `max_side` | `1024` | Photos are downscaled first; cost scales with pixels |
+| `max_pixels` | `50,000,000` | Never decoded above this, read from the header alone. Same bound as `image_format`, which may be in shadow mode and so cannot be relied on to stop a decompression bomb. JPEGs are also decoded at reduced size from the start (`draft`). |
+
+**Detector:** OpenCV's YuNet, 227 KB, MIT licensed, committed to `models/` so the stage needs no download and behaviour cannot shift under us mid-campaign. OpenCV is capped below 5, because this model file is the one documented for OpenCV 4.
+
+**Fail at startup, not quietly all campaign.** The model loads lazily, so one bad submission cannot stop the stage. But a model missing from the deployment would then fail open on *every* submission, and no face would ever be caught. So whatever serves the stage must call `pipeline.preflight()` once before serving (the API, #43, will; until then, call it yourself): each enabled filter checks it can run (face detection loads the model and runs it on a blank image), and `PreflightFailed` names the filter that cannot. Filters that are off are not checked.
+
+**Photos are checked upright.** Phones store portrait photos sideways with an orientation tag, which Pillow does not apply by itself, and the detector is not rotation-invariant. The tag is applied before detection; a tag that cannot be read leaves the photo checked as stored, never unchecked. A very thin image is scaled to at least 1 pixel each way rather than failing, and running out of memory surfaces as an error, never as a pass.
+
+**Measured:** about 63 ms per photo at `max_side` 1024, 47 ms at 640, 22 ms at 320. It is the most expensive filter by an order of magnitude, hence `cost_rank` 40: last, after everything cheap has had a chance to reject.
+
+**Privacy:** the result records that a face was found, how many, and the largest one's relative size. It never records where, because this filter exists to protect people in photos.
+
+**Blur-and-pass is not implemented.** This stage inspects submissions and never rewrites them, so blurring would be a transform step, not a filter. That is the client decision still open in #28: reject, or blur and keep. Switching to `"action": "flag"` is a config change; blurring would need new machinery.
+
+**Honest limit on the tests.** The positive test uses a *drawn* face, which YuNet detects reliably, alongside checks that the suite's ordinary photos are never flagged. Real photographs are the only real validation, and they arrive with the Bielik data: re-measure then, and check whether the client's existing automatic check already covers this before enforcing (#28).
 
 ## Metrics (issue #24)
 

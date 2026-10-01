@@ -56,6 +56,17 @@ class PreFilter(ABC):
         """
         return None
 
+    def preflight(self) -> None:
+        """Fail loudly now if this filter could not run later.
+
+        Filters fail open at run time: a crash becomes a recorded error and the
+        submission passes. That is right for one bad submission and wrong for
+        a filter that can never work, such as a model file missing from the
+        deployment. The service must call `PreFilterPipeline.preflight()` once
+        at startup (wired in with the API, #43), so that case stops the launch
+        instead. Default: nothing to check.
+        """
+
     def rollback(self, interaction: Interaction) -> None:
         """Undo this submission's own commit, and nothing else.
 

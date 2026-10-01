@@ -2,6 +2,13 @@
 
 from .base import NoOpFilter, PreFilter
 from .config import FilterMode, PipelineConfig
+from .face_detection import (
+    FaceAction,
+    FaceBox,
+    FaceDetectionFilter,
+    FaceDetectionSettings,
+    YuNetFaceDetector,
+)
 from .hashing import ImageIdentity, ImageKind, dhash, hamming, image_identity, simhash
 from .image_duplicate import ImageExactDuplicateFilter
 from .image_format import ImageFormatFilter, ImageFormatSettings
@@ -22,7 +29,13 @@ from .near_duplicate import (
     TextNearDuplicateFilter,
     TextNearDuplicateSettings,
 )
-from .pipeline import FilterRecord, MetricsSink, PipelineResult, PreFilterPipeline
+from .pipeline import (
+    FilterRecord,
+    MetricsSink,
+    PipelineResult,
+    PreFilterPipeline,
+    PreflightFailed,
+)
 from .registry import (
     FILTER_BUILDERS,
     FilterDependencies,
@@ -44,6 +57,10 @@ __all__ = [
     "DuplicateImageEvent",
     "ExistingImage",
     "FILTER_BUILDERS",
+    "FaceAction",
+    "FaceBox",
+    "FaceDetectionFilter",
+    "FaceDetectionSettings",
     "FilterDependencies",
     "FilterMode",
     "FilterRecord",
@@ -72,6 +89,7 @@ __all__ = [
     "PreFilter",
     "PreFilterPipeline",
     "PreFilterResult",
+    "PreflightFailed",
     "RateMonitor",
     "SeenImage",
     "StageMetrics",
@@ -82,6 +100,7 @@ __all__ = [
     "TextNearDuplicateFilter",
     "TextNearDuplicateSettings",
     "Verdict",
+    "YuNetFaceDetector",
     "build_filters",
     "build_pipeline",
     "dhash",

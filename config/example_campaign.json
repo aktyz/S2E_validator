@@ -32,6 +32,13 @@
         "cross_user_max_distance": 4,
         "min_cross_user_chars": 60
       }
+    },
+    "face_detection": {
+      "mode": "shadow",
+      "settings": {
+        "action": "reject",
+        "score_threshold": 0.6
+      }
     }
   }
 }
