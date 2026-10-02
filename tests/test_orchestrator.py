@@ -44,6 +44,7 @@ class TestCleanSubmission:
         assert pipeline.filter_names == (
             "text_format",
             "image_format",
+            "submission_velocity",
             "image_exact_duplicate",
             "image_near_duplicate",
             "text_near_duplicate",

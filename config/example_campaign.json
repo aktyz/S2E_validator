@@ -17,6 +17,14 @@
         "min_height": 256
       }
     },
+    "submission_velocity": {
+      "mode": "shadow",
+      "settings": {
+        "window_seconds": 600,
+        "flag_threshold": 12,
+        "reject_threshold": 30
+      }
+    },
     "image_exact_duplicate": "enforce",
     "image_near_duplicate": {
       "mode": "shadow",

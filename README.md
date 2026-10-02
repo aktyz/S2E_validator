@@ -25,7 +25,8 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 | #16 | `ImageNearDuplicateFilter`, `TextNearDuplicateFilter`, near-duplicates | Merged |
 | #23 | Orchestrator: config-built stage, commit phase | Merged |
 | #24 | `StageMetrics`: per-filter counts, latency, shadow visibility | Merged |
-| #21 | `FaceDetectionFilter`: the campaign's no-faces rule, YuNet | This PR |
+| #21 | `FaceDetectionFilter`: the campaign's no-faces rule, YuNet | Merged |
+| #20 | `SubmissionVelocityFilter`: per-contributor submission rate | This PR |
 
 ## Run the tests
 
@@ -60,6 +61,7 @@ Requires Python 3.11+. Runtime dependencies: **Pillow** (decoding photos, percep
 | `src/s2e_validator/prefilters/text.py` | `normalize()` and `canonical()`, shared by every filter that reads a description |
 | `src/s2e_validator/prefilters/registry.py` | `build_pipeline()`, `load_config()`: the stage assembled from config (#23) |
 | `src/s2e_validator/prefilters/face_detection.py` | `FaceDetectionFilter` (#21), YuNet detector |
+| `src/s2e_validator/prefilters/velocity.py` | `SubmissionVelocityFilter` (#20), `SubmissionTimesStore` |
 | `src/s2e_validator/prefilters/metrics.py` | `StageMetrics`: per-filter counts, latency, reject rate, judge calls saved (#24) |
 
 ## Adding a filter
@@ -299,6 +301,7 @@ Filters run in `cost_rank` order — text checks, image checks, exact hashing, t
 |---|---|---|
 | 10 | `text_format` | string work |
 | 12 | `image_format` | decodes the photo |
+| 15 | `submission_velocity` | dict lookup |
 | 20 | `image_exact_duplicate` | SHA-256 + dict lookup |
 | 30 | `image_near_duplicate` | dHash + window scan |
 | 32 | `text_near_duplicate` | SimHash + window scan |
@@ -324,6 +327,30 @@ Filters run in `cost_rank` order — text checks, image checks, exact hashing, t
 | `off` | The filter does not run at all |
 | `shadow` | Runs and logs what it *would* reject; never blocks. **The default for anything not listed.** |
 | `enforce` | A REJECT stops the stage |
+
+## Submission velocity (issue #20)
+
+The only check in the stage that is not content-based. A script can produce submissions that each look fine; what it cannot do is slow down.
+
+| Submissions in the window | Verdict |
+|---|---|
+| Under `flag_threshold` | PASS |
+| `flag_threshold` or more | **FLAG** `SUBMISSION_RATE_ELEVATED` |
+| `reject_threshold` or more | **REJECT** `SUBMISSION_RATE_AUTOMATED` |
+
+Defaults: a 600 second window, a flag at 12 and a rejection at 30. `reject_threshold` must be above `flag_threshold`, or the flag could never fire.
+
+**Why those numbers.** The campaign asks for at least 100 characters of description per photo, so a person needs roughly half a minute per submission even when hurrying. A flag at 12 in ten minutes is above one a minute sustained; a rejection at 30 is three a minute, which nobody is typing. Someone emptying a holiday camera roll in one sitting stays well under both, and that case is a test. These are reasoned starting points, not measurements: recalibrate on real submission times (#27).
+
+**Counted from the submission's own timestamp**, not wall clock, so a backlog replayed after an outage is not read as a burst. `submitted_at` must therefore be the time the platform received the submission: a timestamp the contributor could set would let a script spread itself out on paper.
+
+**`check` reads, `commit` records and counts again.** Several submissions from one contributor can pass `check` together, each seeing the count before the others are recorded. So `commit` records and counts in one atomic step, and its verdict is the authoritative one. Tested with three arriving at once, and with 16 threads recording 400 submissions.
+
+**Only submissions that pass the whole stage are counted.** One rejected by any filter never happened, rate-wise: a `check`-time reject is never committed, and a `commit`-time reject is rolled back, including this filter's own. A retry is the same event, not a faster contributor, and a re-validated submission does not count itself twice. The record belongs to the submission id, not to one validation run: if an accepted submission is validated again and the stage now rejects it, its record goes, the same rule `ImageKeyStore.release` follows.
+
+**A throughput cap, not a ban.** Because rejected attempts are not counted, a script that keeps trying is held to just under `reject_threshold` accepted submissions per window (29 per ten minutes at the defaults), each flagged for the judge from the 12th. It is slowed, not stopped. That is accepted for v1: `check` must not change state, so blocking a caught script outright needs a separate attempts counter and cooldown written by the stage on an enforced reject. Recalibrating the thresholds on real submission times is #27.
+
+**State.** `SubmissionTimesStore` lives on `FilterDependencies`, like the key store and the fingerprint windows, so the rate survives a config reload. Each contributor's history is kept sorted by time and indexed by submission id, so counting is a binary search and nothing scans: the cost of one submission does not grow with the volume a script sends (about 0.02 ms per `check` and `commit` with 430,000 entries retained for one user, against 108 ms for a linear scan). The shared default store remembers one hour, deliberately short, because in shadow mode a script's submissions are all recorded and retention is what it can make the store hold. It trims a contributor's entries as they are touched, correctly even when a replayed backlog arrives out of order, and sweeps out contributors who never came back. A store that remembers less than the window is refused when the filter is built, since it would undercount silently; a window over an hour needs a store built with a longer retention. It is not durable yet: a restart forgets the last window, which only delays a flag by one window.
 
 ## Face detection (issue #21)
 

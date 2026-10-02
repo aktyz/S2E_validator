@@ -27,6 +27,12 @@ from .pipeline import MetricsSink, PreFilterPipeline
 from .stores import ImageKeyStore, InMemoryImageKeyStore, utc_now
 from .suspicion import InMemorySuspicionLog, SuspicionLog
 from .text_format import TextFormatFilter, TextFormatSettings
+from .velocity import (
+    InMemorySubmissionTimes,
+    SubmissionTimesStore,
+    SubmissionVelocityFilter,
+    VelocitySettings,
+)
 from .windows import HashWindow
 
 
@@ -48,6 +54,7 @@ class FilterDependencies:
         suspicion_log: SuspicionLog | None = None,
         clock: Callable[[], datetime] = utc_now,
         hash_windows: MutableMapping[str, HashWindow] | None = None,
+        submission_times: SubmissionTimesStore | None = None,
     ):
         # A real store by default, never None: the filter would otherwise build a
         # private one on every `build_pipeline`, and a reload would silently
@@ -57,6 +64,12 @@ class FilterDependencies:
         )
         self.suspicion_log = suspicion_log if suspicion_log is not None else InMemorySuspicionLog()
         self.clock = clock
+        # A real store by default, for the same reason as the key store: a
+        # filter left to build its own would forget every contributor's
+        # recent rate on each config reload.
+        self.submission_times: SubmissionTimesStore = (
+            submission_times if submission_times is not None else InMemorySubmissionTimes()
+        )
         #: Fingerprint windows by filter name. Injectable for the same reason the
         #: key store is: a durable or shared implementation can be plugged in.
         self.hash_windows: MutableMapping[str, HashWindow] = (
@@ -108,6 +121,10 @@ def _image_near_duplicate(settings: Mapping[str, Any], deps: FilterDependencies)
     )
 
 
+def _submission_velocity(settings: Mapping[str, Any], deps: FilterDependencies) -> PreFilter:
+    return SubmissionVelocityFilter(VelocitySettings.from_dict(settings), deps.submission_times)
+
+
 def _face_detection(settings: Mapping[str, Any], _: FilterDependencies) -> PreFilter:
     return FaceDetectionFilter(FaceDetectionSettings.from_dict(settings))
 
@@ -129,6 +146,7 @@ FILTER_BUILDERS: dict[str, FilterBuilder] = {
     ImageNearDuplicateFilter.name: _image_near_duplicate,
     TextNearDuplicateFilter.name: _text_near_duplicate,
     FaceDetectionFilter.name: _face_detection,
+    SubmissionVelocityFilter.name: _submission_velocity,
 }
 
 

@@ -48,6 +48,12 @@ from .settings import settings_from_dict
 from .stores import DuplicateClaimResult, ImageKeyStore, InMemoryImageKeyStore, SeenImage
 from .suspicion import DuplicateImageEvent, InMemorySuspicionLog, SuspicionLog
 from .text_format import TextFormatFilter, TextFormatSettings
+from .velocity import (
+    InMemorySubmissionTimes,
+    SubmissionTimesStore,
+    SubmissionVelocityFilter,
+    VelocitySettings,
+)
 from .windows import GLOBAL_BUCKET, HashEntry, HashMatch, HashWindow, user_bucket
 
 # Sorted, so adding a name is a one-line diff wherever it belongs.
@@ -79,6 +85,7 @@ __all__ = [
     "ImageNearDuplicateFilter",
     "ImageNearDuplicateSettings",
     "InMemoryImageKeyStore",
+    "InMemorySubmissionTimes",
     "InMemorySuspicionLog",
     "Interaction",
     "MetricsSink",
@@ -94,11 +101,14 @@ __all__ = [
     "SeenImage",
     "StageMetrics",
     "StageSnapshot",
+    "SubmissionTimesStore",
+    "SubmissionVelocityFilter",
     "SuspicionLog",
     "TextFormatFilter",
     "TextFormatSettings",
     "TextNearDuplicateFilter",
     "TextNearDuplicateSettings",
+    "VelocitySettings",
     "Verdict",
     "YuNetFaceDetector",
     "build_filters",
