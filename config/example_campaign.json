@@ -29,7 +29,7 @@
     "image_near_duplicate": {
       "mode": "shadow",
       "settings": {
-        "max_distance": 10,
+        "max_distance": 6,
         "retention_days": 30
       }
     },
