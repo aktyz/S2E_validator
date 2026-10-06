@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import functools
 import io
+import json
 import random
 from collections.abc import Callable
 from datetime import datetime, timezone
 
 from PIL import Image
 
+from s2e_validator.judge import JudgeInput, Prompt
 from s2e_validator.prefilters import (
     FilterMode,
     Interaction,
@@ -132,3 +134,41 @@ class StubFilter(PreFilter):
     def check(self, interaction: Interaction) -> PreFilterResult:
         self.calls += 1
         return self._result() if callable(self._result) else self._result
+
+
+# -- Stage 2 judge ------------------------------------------------------------
+
+ALL_FOUR = {"relevance": 4, "specificity": 4, "language": 4, "effort": 4}
+
+
+def reply(criteria=None, reason_codes=(), confidence=0.9, **extra) -> str:
+    # A bare string is kept as-is, so a test can send the malformed shape itself.
+    codes = reason_codes if isinstance(reason_codes, str) else list(reason_codes)
+    body = {"criteria": criteria or ALL_FOUR, "reason_codes": codes}
+    if confidence is not None:
+        body["confidence"] = confidence
+    body.update(extra)
+    return json.dumps(body)
+
+
+def item(text: str = CASTLE, image=None, flags=()) -> JudgeInput:
+    return JudgeInput(
+        make_interaction(text=text, image=image or NewImage(photo(1))), flags=tuple(flags)
+    )
+
+
+class ScriptedClient:
+    """Plays back replies (or exceptions) in order, and remembers what it saw."""
+
+    name = "scripted"
+
+    def __init__(self, *replies):
+        self._replies = list(replies)
+        self.prompts: list[Prompt] = []
+
+    def complete(self, prompt: Prompt) -> str:
+        self.prompts.append(prompt)
+        next_reply = self._replies.pop(0)
+        if isinstance(next_reply, Exception):
+            raise next_reply
+        return next_reply

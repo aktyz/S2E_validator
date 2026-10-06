@@ -9,7 +9,7 @@ Submission (image + text + metadata)
 Stage 1: deterministic pre-filters   ← this package, no paid or remote calls
         │  REJECT (enforced) → stop, with reason_code
         ▼  PASS (+ flags)
-Stage 2: LLM judge                   ← not built yet
+Stage 2: LLM judge                   ← contract, rubric and stub (#43 J1); no model yet
         │
         ▼
 Reward batch → programs/survey2earn (execute_reward_batch)
@@ -26,7 +26,8 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 | #23 | Orchestrator: config-built stage, commit phase | Merged |
 | #24 | `StageMetrics`: per-filter counts, latency, shadow visibility | Merged |
 | #21 | `FaceDetectionFilter`: the campaign's no-faces rule, YuNet | Merged |
-| #20 | `SubmissionVelocityFilter`: per-contributor submission rate | This PR |
+| #20 | `SubmissionVelocityFilter`: per-contributor submission rate | Merged |
+| #43 J1 | Stage 2 judge: contract, rubric, prompt, stub judge | This PR |
 
 ## Run the tests
 
@@ -63,6 +64,10 @@ Requires Python 3.11+. Runtime dependencies: **Pillow** (decoding photos, percep
 | `src/s2e_validator/prefilters/face_detection.py` | `FaceDetectionFilter` (#21), YuNet detector |
 | `src/s2e_validator/prefilters/velocity.py` | `SubmissionVelocityFilter` (#20), `SubmissionTimesStore` |
 | `src/s2e_validator/prefilters/metrics.py` | `StageMetrics`: per-filter counts, latency, reject rate, judge calls saved (#24) |
+| `src/s2e_validator/judge/rubric.py` | `Rubric`, `Criterion`, `BIELIK_RUBRIC`: what the judge grades, per campaign (#43) |
+| `src/s2e_validator/judge/contract.py` | `JudgeInput`, `JudgeVerdict` (SCORED / HELD), strict `parse_reply()` |
+| `src/s2e_validator/judge/prompt.py` | Provider-neutral `Prompt`; the description goes in as data |
+| `src/s2e_validator/judge/judge.py` | `ModelJudge` (any `ModelClient`, retries, holds) and `StubJudge` |
 
 ## Adding a filter
 
@@ -430,6 +435,43 @@ Latency covers both halves of a filter's work, `check` and `commit`, so a filter
 `AnomalySettings` refuses combinations that could never fire, such as a minimum larger than the window or a ceiling of 100%. Monitors log only after every lock is released, so a log handler can safely read the metrics, for example to attach the current table to an alert. A metrics sink can never break the stage: if `observe` raises, the error is logged and the result is still returned, because by then every filter has committed its claims.
 
 `snapshot().to_dict()` is JSON-ready for a dashboard; `render_snapshot(snapshot)` is the table above.
+
+## Stage 2: the judge contract (#43, J1)
+
+A vision model looks at the photo and the description together and rates them against a campaign rubric. Scope and open decisions are in #43; this is the first piece, the contract, and it makes no model call yet.
+
+```python
+from s2e_validator.judge import BIELIK_RUBRIC, JudgeInput, StubJudge
+
+verdict = StubJudge(BIELIK_RUBRIC).judge(JudgeInput(interaction, flags=("DUPLICATE_IMAGE_TEXT_ONLY",)))
+verdict.to_dict()
+# {"status": "SCORED", "quality_score": 75, "is_rewardable": true,
+#  "criteria": {"relevance": 4, ...}, "reason_codes": [], "flags": [...],
+#  "judge": {"model": "stub", "prompt_version": "bielik-v1/…", "rubric_version": "bielik-v1"}, ...}
+```
+
+**A judge failure is never a score.** A reply that is missing, not JSON, off-vocabulary or out of range is retried, then **HELD**: no score, not rewardable, a `hold_reason`, and a person decides. Defaulting it to 0 would punish a contributor for our outage; defaulting it to anything higher would pay for a submission nobody judged. The same applies when the photo cannot be loaded or its type cannot be read from its bytes; the type the uploader declared is never used. `judge()` never raises: `parse_reply` turns anything wrong with a reply, including one built to crash a JSON parser, into the same hold.
+
+**The model rates, the code scores.** The model rates each criterion from 1 to 5; `Rubric.score()` turns the ratings into 0 to 100 as a weighted mean, computed exactly, with a half rounding up, so anything that recomputes a score gets the same number. A model asked for "a score out of 100" clusters and drifts, and a number it invents cannot be checked. Ratings per criterion can be compared one by one against human labels (J3).
+
+| Bielik criterion | Weight | Question |
+|---|---|---|
+| `relevance` | 2 | Does it describe what is actually in this photo? |
+| `specificity` | 1.5 | Concrete details of *this* photo, or words that fit any photo? |
+| `language` | 1 | Readable, natural Polish? |
+| `effort` | 1 | A genuine attempt, or the least text that would pass? |
+
+Rewardable from 40. `DESCRIPTION_MISMATCH`, `NOT_A_PHOTO` and `INSTRUCTIONS_TO_JUDGE` make a submission unrewardable whatever the ratings. Every rubric must list `INSTRUCTIONS_TO_JUDGE` as blocking, and refuses to load otherwise, because every prompt asks the judge to use it. These are starting points; J2 and J3 measure them against hand-labelled submissions before anything is enforced.
+
+**The description is data, never instructions.** It is sent after the photo as one JSON string on one line: a quote, a newline and the Unicode line breaks (U+0085, U+2028, U+2029) all arrive escaped, so the text cannot end its own string or start a new line. The instructions tell the model the text may try to address it; if it does, the reply must say `INSTRUCTIONS_TO_JUDGE`, which makes it unrewardable. Escaping stops a description *restructuring* the prompt; the rubric handles one that merely *asks*.
+
+**What escaping cannot do.** A chat template's control strings, such as `<|im_start|>system`, are ordinary characters to JSON. Whether they become role markers depends on how the model client sends the prompt, so the `ModelClient` contract requires structured messages and forbids splicing a description into a raw template string. That matters most for a self-hosted model, and is for J4 to implement and test.
+
+**Stage 1 flags reach the verdict but not the model.** A text-only contribution is accounted for in the score-to-Q mapping (M1), not by grading its description more harshly, so showing the flag to the model would only bias the rating. The validator sends Q on-chain; `programs/survey2earn` turns it into a reward amount.
+
+**Provenance on every verdict:** model name, `prompt_version` (the rubric version plus a hash of the exact instructions and of the labels around the photo and the description) and `rubric_version`. Any payout traces back to the prompt that produced it, and a reworded prompt is visibly a new version.
+
+**No model client yet, on purpose.** `ModelJudge` takes anything with `name` and `complete(prompt) -> str`. Choosing the model is J4, and whether a contributor's photo may go to a commercial API at all waits on the client (D5 in #43). Until then, `StubJudge` runs the same validation as a real reply, so everything downstream can be built against it.
 
 ## Decisions (issue #13)
 
