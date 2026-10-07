@@ -36,7 +36,7 @@ _DESCRIPTION_LABEL = "The contributor's description, as a JSON string:\n"
 
 #: json.dumps escapes the quote, the backslash and U+0000 to U+001F. These
 #: three also break a line in most renderers, so they are escaped too.
-_LINE_SEPARATORS = {"\u0085": "\\u0085", " ": "\\u2028", " ": "\\u2029"}
+_LINE_SEPARATORS = {"\u0085": "\\u0085", "\u2028": "\\u2028", "\u2029": "\\u2029"}
 
 _SIGNATURES = (
     (b"\xff\xd8\xff", "image/jpeg"),

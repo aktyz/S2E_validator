@@ -5,14 +5,13 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import NamedTuple, Protocol
+
+from ..clock import utc_now  # noqa: F401 - re-exported for the filters
 
 DEFAULT_RETENTION = timedelta(days=30)
 
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 @dataclass(frozen=True)

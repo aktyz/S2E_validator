@@ -24,7 +24,28 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+# The pipeline itself needs none of these. Each extra is one way of running it.
+api = [
+    # The HTTP service (#43, R1). FastAPI is still 0.x and changes between
+    # minors, so the cap is the series it was tested against (0.141).
+    "fastapi>=0.115,<0.142",
+    # Reads the uploaded photo from a multipart form. This parses untrusted
+    # bytes from the internet, so the floor is the release that fixed its
+    # denial-of-service bug (CVE-2024-53981).
+    "python-multipart>=0.0.18,<1",
+    "uvicorn>=0.30,<1",
+]
+solana = [
+    # Signing, address derivation and transaction layout for the reward batch
+    # (#43, M2). It signs payouts, so it is pinned to the series the encoding
+    # tests ran against. Tested against 0.29.
+    "solders>=0.26,<0.30",
+]
+dev = [
+    "pytest>=8",
+    # FastAPI's test client needs it.
+    "httpx>=0.27,<1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

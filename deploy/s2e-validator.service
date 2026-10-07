@@ -1,0 +1,38 @@
+[Unit]
+Description=Survey2Earn validator API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=s2e
+Group=s2e
+EnvironmentFile=/etc/s2e/validator.env
+# One worker, on purpose: duplicate detection keeps its memory in the process,
+# and only one process may sign with the run's key.
+ExecStart=/opt/s2e/venv/bin/uvicorn --factory s2e_validator.api.main:build_app \
+    --host 127.0.0.1 --port 8000 --workers 1 --no-server-header
+Restart=on-failure
+RestartSec=5
+# A send in doubt is resolved within about two minutes; give a stop that long
+# before it is killed. Killing it is still safe: the send is in the batch log.
+TimeoutStopSec=150
+
+# The service can write to its own state directory and nowhere else, and it
+# cannot read anyone's home directory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/s2e
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

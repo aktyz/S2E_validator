@@ -27,13 +27,19 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 | #24 | `StageMetrics`: per-filter counts, latency, shadow visibility | Merged |
 | #21 | `FaceDetectionFilter`: the campaign's no-faces rule, YuNet | Merged |
 | #20 | `SubmissionVelocityFilter`: per-contributor submission rate | Merged |
-| #43 J1 | Stage 2 judge: contract, rubric, prompt, stub judge | This PR |
+| #43 M3 | Validator signing key: loading and runbook | This PR |
+| #43 M2 | Reward batches: planning, sending, never paying twice | This PR |
+| #43 M4 | Durable batch log (SQLite) | This PR |
+| #43 J1 | Stage 2 judge: contract, rubric, prompt, stub judge | Merged |
+| #43 R1 | The validator as a service: two HTTP calls, score mapping, dry run | This PR |
+| #43 M2 | Solana client for `execute_reward_batch`; **not yet run against a cluster** | This PR |
+| #43 R3 | Demo deployment: server setup, service, deploy workflow | This PR |
 
 ## Run the tests
 
 ```bash
 cd validator
-python -m pip install -e ".[dev]"   # or just: pip install pytest
+python -m pip install -e ".[dev,api,solana]"
 python -m pytest
 python -m pytest -m slow            # latency budgets, opt-in
 ```
@@ -41,6 +47,8 @@ python -m pytest -m slow            # latency budgets, opt-in
 The `slow` tests assert on wall-clock time, which flakes on a shared CI runner, so they are left out of the default run and out of CI. Run them deliberately, on an idle machine, when a change could affect the hot path.
 
 Requires Python 3.11+. Runtime dependencies: **Pillow** (decoding photos, perceptual hashing) and **opencv-python-headless** with **numpy** (face detection). The YuNet model ships in `models/`, so there is no download step; see `models/README.md`.
+
+Two optional extras, neither needed by the pipeline itself: `api` (FastAPI, uvicorn, python-multipart) serves it over HTTP, and `solana` (solders) signs reward batches. Their tests skip when the extra is not installed.
 
 ## Layout
 
@@ -64,6 +72,21 @@ Requires Python 3.11+. Runtime dependencies: **Pillow** (decoding photos, percep
 | `src/s2e_validator/prefilters/face_detection.py` | `FaceDetectionFilter` (#21), YuNet detector |
 | `src/s2e_validator/prefilters/velocity.py` | `SubmissionVelocityFilter` (#20), `SubmissionTimesStore` |
 | `src/s2e_validator/prefilters/metrics.py` | `StageMetrics`: per-filter counts, latency, reject rate, judge calls saved (#24) |
+| `src/s2e_validator/settlement/keys.py` | `load_validator_key()`: the signing key, loaded strictly (#43 M3) |
+| `src/s2e_validator/settlement/batches.py` | `Payable`, `plan_batches()`: at most 64 users, each once per batch (#43 M2) |
+| `src/s2e_validator/settlement/submitter.py` | `BatchSubmitter`: sends batches in sequence, resolves every doubt on-chain (#43 M2) |
+| `src/s2e_validator/settlement/log.py` | `BatchLog`: every batch recorded before it is sent |
+| `src/s2e_validator/settlement/chain.py` | `ChainClient`: what the submitter needs from Solana, library-free |
+| `src/s2e_validator/settlement/sqlite_log.py` | `SqliteBatchLog`: the batch log on disk, one writer at a time |
+| `src/s2e_validator/settlement/mapping.py` | `ScoreMapping`: a verdict to the number sent on-chain (#43 M1, provisional) |
+| `src/s2e_validator/settlement/dry_run.py` | `DryRunChain`: settles nothing, and says so |
+| `src/s2e_validator/settlement/solana.py` | `SolanaChain`: builds, signs and sends `execute_reward_batch` (`solana` extra) |
+| `src/s2e_validator/api/service.py` | `ValidatorService`: filter, judge, price, settle; no web framework |
+| `src/s2e_validator/api/app.py` | The HTTP layer: two calls and a health check (`api` extra) |
+| `src/s2e_validator/api/main.py` | Starts the service from environment settings |
+| `src/s2e_validator/tools/` | `new_key`, `demo_wallets`: command-line tools for operating the demo |
+| `deploy/` | Server setup script, systemd unit, nginx config, settings example |
+| `src/s2e_validator/filelock.py` | `FileLock`: an exclusive lock the OS releases if the process dies |
 | `src/s2e_validator/judge/rubric.py` | `Rubric`, `Criterion`, `BIELIK_RUBRIC`: what the judge grades, per campaign (#43) |
 | `src/s2e_validator/judge/contract.py` | `JudgeInput`, `JudgeVerdict` (SCORED / HELD), strict `parse_reply()` |
 | `src/s2e_validator/judge/prompt.py` | Provider-neutral `Prompt`; the description goes in as data |
@@ -436,6 +459,91 @@ Latency covers both halves of a filter's work, `check` and `commit`, so a filter
 
 `snapshot().to_dict()` is JSON-ready for a dashboard; `render_snapshot(snapshot)` is the table above.
 
+## The validator's signing key (#43, M3)
+
+`execute_reward_batch` checks one thing about who is paying: that the run's `validator_authority` signed. Whoever holds that key can pay any contributor any share of a run's pool, so it is the most valuable thing this service touches.
+
+```python
+from s2e_validator.settlement import KeySettings, load_validator_key
+
+key = load_validator_key(KeySettings.from_env())   # S2E_VALIDATOR_KEYPAIR, S2E_NETWORK, S2E_VALIDATOR_PUBKEY
+print(key)   # ValidatorKey(network=devnet, public_key=...)
+```
+
+The loader refuses, with a message saying what to fix, when:
+
+| Refusal | Why |
+|---|---|
+| The path is relative | It would resolve against the working directory, which is usually the repository |
+| The file is inside any git working tree | One `git add .` from being committed |
+| Others can read or write it (Linux, macOS) | `chmod 600` is the fix it prints |
+| It is a devnet or mainnet key on Windows | Windows keeps permissions in ACLs the check cannot see; localnet only there |
+| It is not the key the run expects (`S2E_VALIDATOR_PUBKEY`) | Catches a devnet key pointed at mainnet at startup, not as a failed payment |
+| It is one of the four keys committed before #37 | Removed from the tree, still in git history, so public |
+| The file is not 64 bytes of JSON | Without quoting any of the file in the message or the traceback |
+
+The loaded key prints as its public key only, has no `__dict__`, and refuses to be pickled or copied. The bytes come out through `keypair_bytes()`, for the signer alone. This module does not check that the secret half matches the public half, because Python has no Ed25519 built in; the signing library the batch submitter (M2) brings verifies the pair when it loads it.
+
+### Runbook
+
+1. **Create the key on the machine that will run the validator.** Never on a laptop that also holds the repository.
+   ```bash
+   mkdir -p ~/.config/s2e && chmod 700 ~/.config/s2e
+   solana-keygen new --no-bip39-passphrase -o ~/.config/s2e/devnet-validator.json
+   chmod 600 ~/.config/s2e/devnet-validator.json
+   solana address -k ~/.config/s2e/devnet-validator.json   # the public key
+   ```
+2. **Hand over the public key, never the file.** It goes into `initialize_survey_run_config` as `validator_authority`. One key per network: a devnet key never signs on mainnet.
+3. **Start the validator** with `S2E_VALIDATOR_KEYPAIR` (absolute path), `S2E_NETWORK` and `S2E_VALIDATOR_PUBKEY` (the address from step 1).
+4. **Back it up offline**, in a password manager or similar. Nothing can recover it, and a lost key means the rest of that run cannot be settled.
+
+**Changing the key.** The key can only be set before the survey is funded. After that it is fixed for every run of the survey, including the runs the keeper creates later, which copy it (#44). That is deliberate, so contributors and AI builders can trust the rules will not change mid-survey. A new key means a new survey.
+
+**If the key is exposed.** Tell the program authority at once: `freeze_program_config` stops every reward batch, because `execute_reward_batch` refuses while the protocol is frozen. The key cannot be replaced for the rest of that survey (#44), so continue with a new key in a new survey. Add the exposed public key to `BURNED_PUBLIC_KEYS` so it can never be loaded again.
+
+## Reward batches (#43, M2)
+
+```python
+submitter = BatchSubmitter(chain, InMemoryBatchLog(), key.public_key)
+report = submitter.settle([Payable("sub-1", "<contributor wallet>", quality=72), ...])
+report.stopped          # StopReason.DONE, or why it stopped
+report.paid_submission_ids
+```
+
+**Planning.** `execute_reward_batch` takes at most 64 users, each once. `plan_batches` puts each payable in the earliest batch with room that does not already hold that user, so payment is roughly first come, first served and one prolific contributor never holds up everyone else. A contributor with several submissions spreads across batches, one entry each; whether they should be combined instead is D3 in #43.
+
+**Why nobody is paid twice.** The program accepts a batch only when its `batch_sequence` equals the run's `expected_sequence`, then increments it, so at most one transaction per sequence number can ever land. On top of that:
+
+1. A batch keeps its sequence number until the chain gives a *final* answer about that send.
+2. An answer is final once the transaction has expired. Every Solana transaction is only valid until its blockhash's `last_valid_block_height`, so after that the chain says either "expects N+1" (it landed) or "still expects N" (it never will, and resending under N is safe).
+3. The signed transaction is written to the log as SENDING *before* it is broadcast, so a crash never leaves a transaction in flight that the log does not know about.
+4. One batch at a time, and an unresolved send is always resolved before anything new is signed.
+
+A sequence number that moves any other way means something else is signing with the run's key: `SequenceConflict`, and everything stops.
+
+| What happens to a send | What the submitter does |
+|---|---|
+| Lands and confirms | CONFIRMED |
+| Program rejects it | FAILED, final; its sequence number goes to the next batch, and a person decides (`requeue`) |
+| Dropped, or a transport error | Waits until it has expired, reads the chain, resends under the same number |
+| Lands, but the confirmation is lost | Waits, reads the chain, finds it landed: CONFIRMED, no resend |
+| The validator crashes mid-send | The next `settle` resolves it the same way before doing anything else |
+
+**When it will not send**, leaving every batch queued: the protocol is frozen, the survey is not in a state that allows payouts (Rolling or Refundable once #44 lands), the run is not Active, the run's `validator_authority` is a different key, or the run's stop time is inside the safety margin (5 minutes by default, which must outlast a transaction's lifetime).
+
+**Tested against a simulated chain** that enforces both rules the argument rests on, the sequence check and transaction expiry, and fails each way above on cue. 150 randomised runs mix every failure with crashes and restarts, and check that each confirmed submission was paid exactly once and nothing else was paid. Breaking any of rules 1, 3 or 4 on purpose fails the suite.
+
+**On disk: `SqliteBatchLog`** (M4). `InMemoryBatchLog` proves the rules; this makes them hold across a crash.
+
+- Every write is its own transaction, committed with `synchronous=FULL` before the call returns. The one that matters most is SENDING: the broadcast happens only after it is on disk.
+- One writer at a time, across processes: writes take an OS file lock beside the database (`batches.sqlite.lock`), which the operating system releases if the process dies, so there is never a stale lock to clear by hand. A second validator on the same log gets `LockBusy`.
+- A batch whose submissions are already claimed is refused whole; nothing is half-written.
+- The schema is versioned; a log written by newer code is refused rather than misread.
+
+Tested the same way as the submitter, but with a real restart: 40 randomised runs close and reopen the log from disk before every attempt, crashes included, and nobody is paid twice.
+
+**Not built yet:** the real `ChainClient` for Zyta's program (the instruction, the per-user accounts, reading the run). Q values arrive already mapped from judge scores (M1).
+
 ## Stage 2: the judge contract (#43, J1)
 
 A vision model looks at the photo and the description together and rates them against a campaign rubric. Scope and open decisions are in #43; this is the first piece, the contract, and it makes no model call yet.
@@ -472,6 +580,139 @@ Rewardable from 40. `DESCRIPTION_MISMATCH`, `NOT_A_PHOTO` and `INSTRUCTIONS_TO_J
 **Provenance on every verdict:** model name, `prompt_version` (the rubric version plus a hash of the exact instructions and of the labels around the photo and the description) and `rubric_version`. Any payout traces back to the prompt that produced it, and a reworded prompt is visibly a new version.
 
 **No model client yet, on purpose.** `ModelJudge` takes anything with `name` and `complete(prompt) -> str`. Choosing the model is J4, and whether a contributor's photo may go to a commercial API at all waits on the client (D5 in #43). Until then, `StubJudge` runs the same validation as a real reply, so everything downstream can be built against it.
+
+## The validator as a service (#43, R1)
+
+One submission in, one outcome out. **Server to server:** the demo site's backend calls it with an API key (`Authorization: Bearer <key>`); a browser never does, so there is no CORS and no public documentation page.
+
+```
+POST /submissions        multipart: photo, description, wallet
+GET  /submissions/{id}   the same outcome again, e.g. once a waiting reward landed
+GET  /healthz            no key needed
+```
+
+```bash
+curl -H "Authorization: Bearer $S2E_API_KEY" \
+     -F photo=@castle.jpg -F description="Zamek na wzgórzu nad rzeką..." -F wallet=<contributor address> \
+     https://api.example.org/submissions
+```
+
+```json
+{
+  "submission_id": "5f0c...", "state": "paid", "settled_on": "devnet",
+  "quality_score": 75, "reward_units": 75, "reward_display": "0.000075",
+  "transaction": "4vJ9...", "flags": [], "reason_code": null, "rejected_by": null, "detail": null
+}
+```
+
+| `state` | Meaning |
+|---|---|
+| `rejected` | An enforced Stage 1 filter stopped it. `rejected_by` names the filter, `reason_code` says why. |
+| `held` | The judge could not give a trustworthy answer. A person decides. |
+| `not_rewarded` | Judged, and not paid: below the bar, or a duplicate photo. `reason_code` says which. |
+| `batched` | Accepted. Its reward has not landed yet; `detail` says what it is waiting for. |
+| `paid` | `transaction` is the reward batch's signature. |
+| `failed` | Accepted, but the program refused the batch. A person decides. |
+
+The call answers once the submission is decided, so the plan's passing steps (received, checked, scored) are not separate states here: `not_rewarded`, `batched` and `paid` all mean it was scored.
+
+`wallet` is the contributor's Solana address: who they are to Stage 1, and where the reward goes. It must already be registered for the survey (a UserSurvey account and a token account for the reward mint), which the demo site does on a visitor's first submission. A wallet that is not registered ends as `failed`, because the program refuses the batch; the service does not check registration first.
+
+`service.py` holds everything that decides an outcome and has no web framework in it; `app.py` only checks the key, bounds what comes in (photo size while reading, field lengths, a well-formed address) and turns outcomes into JSON. The service calls `pipeline.preflight()` before it serves, so it refuses to start with a filter that cannot run.
+
+**`settled_on` is in every answer.** It is `dry-run` when nothing reaches Solana, and a dry run's signatures start with `dryrun-`, so a made-up settlement can never be read as a payout. `S2E_CHAIN` has no default for the same reason: a deployment has to say whether it pays.
+
+**A node that is down does not lose the submission.** The payable is written to the batch log before the chain is asked anything. If the chain cannot be reached, the answer is `batched` with the submission's id, and the service retries waiting rewards every 30 seconds without anyone asking. The one error that is not retried is `SequenceConflict` (something else is signing with the run's key): settlement stops, and `POST` answers 503.
+
+**The demo runs the stub judge**, by decision (D9): it shows the filters and the settlement, every accepted submission scores 75, and no contributor content goes to any model.
+
+Run it locally, settling nothing:
+
+```bash
+export S2E_CHAIN=dry-run S2E_PIPELINE_CONFIG=config/example_campaign.json \
+       S2E_BATCH_LOG=/tmp/batches.sqlite S2E_MAX_UNITS_PER_SUBMISSION=1000000 \
+       S2E_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+uvicorn --factory s2e_validator.api.main:build_app
+```
+
+Every setting is listed in `api/main.py`.
+
+### From a score to a payout (#43, M1)
+
+`ScoreMapping` is a pure function of the judge's score, the Stage 1 flags and static config. Nothing in it learns or adapts; tuning changes a config value, never logic.
+
+- **Scale.** `quality_score x units_per_point` base units, in whole numbers throughout.
+- **Clamp.** Never more than `max_units_per_submission`. That setting is required and has no default: the program does not cap a single payout below the run's remaining pool (#74), so this is the only limit.
+- **A duplicate photo pays nothing**, exact or near, the contributor's own or someone else's. On the demo site Stage 1 only observes, so this rule is what stops a re-uploaded photo being paid. To make that work, the service hands the mapping everything Stage 1 flagged *and* everything it would have rejected had the filter been enforced.
+- **No lower rate for text-only contributions yet.** Every photo on the demo site is an upload, so there is no setting for pooled photos; it comes back when they do.
+
+| Score | `units_per_point` 10,000, 6-decimal mint |
+|---|---|
+| 100 | 1.000000 |
+| 75 (every stub verdict) | 0.750000 |
+| 40 (the lowest rewardable) | 0.400000 |
+| below 40, held, or a duplicate photo | nothing; left out of the batch |
+
+### Known limits
+
+- **One reward per transaction.** Each accepted submission is sent as its own batch, so the answer can carry its transaction. That is right for a demo and wasteful for a campaign, which would collect payables and settle on a timer.
+- **A lost send answers `batched`.** If a transaction gets no confirmation within about a minute, the request ends as `batched` and the retry loop resolves it in the background once the transaction has expired. Other rewards wait behind it until then.
+- **A reward that cannot be recorded is a 503.** If the batch log cannot be written (a full disk, a busy lock), nothing is owed and the answer says so. Stage 1 has already counted the photo, so a retry would look like a duplicate; those need a person, and are logged as `reward_not_recorded`. Releasing the photo's claim in that case is #39.
+- **Outcomes live in memory**, the newest 50,000. After a restart, `GET /submissions/{id}` no longer knows an old id; the reward itself is safe in the batch log.
+- **Stage 1 memory is in the process** until #50, so a restart forgets which photos were seen.
+- **Limits per visitor are the site's job.** Every request here comes from the site's backend, so this service cannot tell visitors apart except by wallet, and wallets are free to make.
+
+## The Solana client (#43, M2)
+
+`settlement/solana.py` is the `ChainClient` for the deployed program: it reads the run's state, builds and signs `execute_reward_batch`, sends it and reports whether it landed. Signing and address derivation come from `solders`; the RPC calls are plain JSON over HTTPS from the standard library.
+
+> **Not yet run against a cluster.** Everything in `tests/test_solana.py` runs against a pretend node. The account layouts and the instruction are copied from the program as of #47; the first real batch on devnet is still to come, and the compute budget numbers are estimates until then.
+
+**At most 10 users per transaction, not 64.** The program allows 64 users per batch, but a Solana transaction is at most 1232 bytes and every user costs 74 of them (two 32-byte addresses, two index bytes, one 8-byte score). Ten users is 1168 bytes; eleven is 1242. The service plans batches of `MAX_USERS_PER_TRANSACTION`, and a test pins the number. Reaching 64 needs address lookup tables, which is not built.
+
+**One run, chosen by the operator.** The client is given `S2E_RUN_ID` and does not follow a rotation on its own. A sequence number only means something inside one run: if a send from run 0 were resolved by reading run 1, "the chain still expects 0" would look like "it never landed", and the batch would be paid twice. Moving to the next run is a restart with the new id, once the batch log has no send in doubt.
+
+**What counts as an answer.** `LANDED` and `FAILED` are reported only for a transaction the cluster has confirmed. A program error during the node's simulation is also `FAILED`, since the node did not pass the transaction on. Everything else (no status in time, a node that is behind, a transport error) is `UNKNOWN`, which the submitter resolves by waiting until the transaction has expired and reading the run's sequence.
+
+**Checked at startup.** With `S2E_CHAIN=solana` the service reads the run once before serving and refuses to start if the program, survey or run does not exist, or if the run's `validator_authority` is not this service's key.
+
+**What the run needs before a batch can land** (the survey creator's side):
+
+- the run's `validator_authority` is the address printed by `tools.new_key`;
+- the run is Active, in a Rolling or Refundable survey, and its vault holds the reward mint;
+- the program authority's token account for the reward mint exists (the program reads it on every batch);
+- every wallet that submits is registered. The demo site does this for its visitors; for a run without the site, `python -m s2e_validator.tools.demo_wallets` creates and registers a few wallets to submit as;
+- the validator's address holds a little SOL for fees.
+
+**The run's budget.** A batch above the run's remaining cap is not refused by the program: it is scaled down and takes the whole cap, after which every later batch fails. So the client reports `min(reward_cap - emitted_rewards, vault balance)` with the run's state, and the submitter never sends a batch that totals more. Such a batch waits, unchanged, and the API answers `batched` with the reason. The vault is part of the budget because the cap is a counter, not a balance: a keeper-created run starts with an empty vault.
+
+## Deploying the demo (#43, R3)
+
+A small Linux server runs the API behind nginx. The demo site (#70) is hosted elsewhere; its backend calls this API with `S2E_API_KEY`.
+
+Who can touch what:
+
+| User | Can | Cannot |
+|---|---|---|
+| `s2e` (runs the service) | read the code and settings, write `/var/lib/s2e` | log in, change its own code |
+| `deploy` (GitHub Actions) | replace the code, restart the service | read the settings or the signing key directly |
+
+**`deploy` can run code as `s2e`**, because it replaces the code the service executes. So the real boundary is who can start the deploy workflow: it runs from main only, and the `demo` environment should have required reviewers and a main-only branch rule. Dependencies are installed from version ranges, not a lock file with hashes; that is a known gap.
+
+Once, on a fresh Ubuntu 24.04 server:
+
+1. Copy `validator/` to the server and run `sudo bash deploy/setup-server.sh api.<domain> '<deploy public key>'`. It installs nginx and certbot, opens only SSH and the web ports, creates the two users and installs the service.
+2. Point `api.<domain>` at the server, then `sudo certbot --nginx -d api.<domain>`.
+3. In GitHub, create the `demo` environment with `DEPLOY_HOST`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` and `API_URL`, and run the **Deploy validator** workflow.
+4. Make the signing key on the server, and send only the address it prints to the survey's creator:
+   `sudo -u s2e /opt/s2e/venv/bin/python -m s2e_validator.tools.new_key --out /var/lib/s2e/keys/devnet-validator.json`
+5. Fill in `/etc/s2e/validator.env` (start with `S2E_CHAIN=dry-run`), then `sudo systemctl start s2e-validator`.
+
+After that, every deploy is the workflow, started by hand. It copies the code, restarts the service and fails if `/healthz` does not answer.
+
+nginx caps the whole API at 120 submissions a minute and refuses uploads over 27 MB before they reach Python. For uptime, point any external monitor at `https://api.<domain>/healthz`.
+
+Logs: `journalctl -u s2e-validator -f`. A line starting `settlement_halted` means payouts stopped and a person is needed.
 
 ## Decisions (issue #13)
 

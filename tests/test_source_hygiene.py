@@ -17,7 +17,8 @@ VALIDATOR = pathlib.Path(__file__).resolve().parents[1]
 def _invisible(char: str) -> bool:
     code = ord(char)
     return (
-        unicodedata.category(char) == "Cf"
+        unicodedata.category(char) in ("Cf", "Zl", "Zp")
+        or code == 0x85
         or code == 0xFFFD
         or 0xFE00 <= code <= 0xFE0F
     )
