@@ -9,7 +9,7 @@ Submission (image + text + metadata)
 Stage 1: deterministic pre-filters   ← this package, no paid or remote calls
         │  REJECT (enforced) → stop, with reason_code
         ▼  PASS (+ flags)
-Stage 2: LLM judge                   ← contract, rubric and stub (#43 J1); no model yet
+Stage 2: judge                       ← contract and rubric (#43 J1); the demo runs the deterministic stub (D9)
         │
         ▼
 Reward batch → programs/survey2earn (execute_reward_batch)
@@ -27,13 +27,15 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 | #24 | `StageMetrics`: per-filter counts, latency, shadow visibility | Merged |
 | #21 | `FaceDetectionFilter`: the campaign's no-faces rule, YuNet | Merged |
 | #20 | `SubmissionVelocityFilter`: per-contributor submission rate | Merged |
-| #43 M3 | Validator signing key: loading and runbook | This PR |
-| #43 M2 | Reward batches: planning, sending, never paying twice | This PR |
-| #43 M4 | Durable batch log (SQLite) | This PR |
-| #43 J1 | Stage 2 judge: contract, rubric, prompt, stub judge | Merged |
-| #43 R1 | The validator as a service: two HTTP calls, score mapping, dry run | This PR |
-| #43 M2 | Solana client for `execute_reward_batch`; **not yet run against a cluster** | This PR |
-| #43 R3 | Demo deployment: server setup, service, deploy workflow | This PR |
+| #43 M3 | Validator signing key: loading and runbook | Merged (#66) |
+| #43 M2 | Reward batches: planning, sending, never paying twice | Merged (#66) |
+| #43 M4 | Durable batch log (SQLite) | Merged (#66) |
+| #43 J1 | Stage 2 judge: contract, rubric, prompt, stub judge | Merged (#48) |
+| #43 M1 | Score to reward mapping; demo scale 1 unit per point, at most 100 (#87) | Merged (#66, #92) |
+| #43 R1 | The validator as a service: two HTTP calls, score mapping, dry run | Merged (#66, #92) |
+| #43 M2 | Solana client for `execute_reward_batch`; run on devnet since 2026-10-07 | Merged (#66) |
+| #43 R3 | Demo deployment: server setup, service, deploy workflow | Merged (#66) |
+| — | Technical demo: `demo/run_demo.py`, six submissions through the real service | Merged (#92) |
 
 ## Run the tests
 
@@ -163,9 +165,9 @@ At a 1M-photo campaign the store holds roughly 100 MB of keys, which is the poin
 
 ### Open: releasing a claim when a submission is rejected later
 
-A photo's claim is made when Stage 1 passes, but the judge (#stage-2) or settlement can still reject the submission afterwards. The original then holds the photo's key without ever being paid, and a second contributor is capped at text-only on a photo nobody owns.
+A photo's claim is made when Stage 1 passes, but the judge (Stage 2) or settlement can still reject the submission afterwards. The original then holds the photo's key without ever being paid, and a second contributor is capped at text-only on a photo nobody owns.
 
-Nothing is lost today — no judge exists yet — but before the campaign runs, `ImageKeyStore` needs a `release(key, submission_id)` and the judge stage needs to call it on rejection. Worth its own issue rather than guessing the shape here, since it depends on what settlement does with a rejected entry (#12).
+On the demo the stub judge scores every accepted submission, so the judge never rejects after Stage 1; a held verdict, a model judge later, or a reward that cannot be recorded can. `ImageKeyStore.release(key, submission_id)` exists for Stage 1's own rollback; calling it when a later stage rejects is #39.
 
 ## Length & format (issue #14)
 
@@ -295,7 +297,9 @@ Fingerprints are cached by a **digest** of the input, never the input itself: ke
 
 `same_user_max_distance: 10`, `cross_user_max_distance: 4`, image `max_distance: 10`.
 
-**These are synthetic measurements, and the honest-pair floor rests on a single pair.** Noise photos have independent hashes by construction, so they say little about two honest photos of the same landmark from the same viewpoint, which is the campaign's normal case and can land much closer. A false positive there is not free: cross-user it downgrades an honest contributor to text-only. Recalibration against real campaign submissions is #27, and nothing here should be enforced before it.
+**These are synthetic measurements, and the honest-pair floor rests on a single pair.** Noise photos have independent hashes by construction, so they say little about two honest photos of the same landmark from the same viewpoint, which is the campaign's normal case and can land much closer. A false positive there is not free: cross-user it downgrades an honest contributor to text-only.
+
+**Measured on real photos (#27, merged in #71):** over the Polish split of Crossmodal-3600, image `max_distance` 10 lets 304 pairs of different photos collide, and 6 lets 31 while still catching every re-save and resize. 6 is set in `config/example_campaign.json`; the code default stays 10 until agreed. Text thresholds are kept. See `calibration/README.md`. This is external data, not campaign submissions, so the near-duplicate filters stay observing until real submissions are seen.
 
 ### Measured latency (Python 3.11.9, Windows laptop)
 
@@ -319,7 +323,7 @@ pipeline = build_pipeline(load_config("config/example_campaign.json"))
 outcome = pipeline.run_pre_filters(interaction)
 
 if outcome.proceeds_to_judge:
-    judge(interaction, flags=outcome.flags)   # stage 2, not built yet
+    judge(interaction, flags=outcome.flags)   # Stage 2, see below
 else:
     reject(outcome.reason_code, outcome.decided_by)
 ```
@@ -341,7 +345,7 @@ Filters run in `cost_rank` order — text checks, image checks, exact hashing, t
 
 **Later filters' check results are kept.** When a commit rejects, the filters after it never commit, but their `check` already ran, and those records stay in the result. Shadow mode exists to collect exactly that evidence.
 
-**What reaches Stage 2.** Only PASS proceeds. Flags travel with it as context (`outcome.flags`), so the judge knows a submission is, say, text-only because someone else owns the photo. A REJECT never becomes a batch entry at all, so it leaves no on-chain trace — the mapping raised in #12 and #28 is still open, and switching a reject to `Q_i = 0` instead would be a change here, not in the filters.
+**What reaches Stage 2.** Only PASS proceeds. Flags travel with it as context (`outcome.flags`), so the judge knows a submission is, say, text-only because someone else owns the photo. A REJECT never becomes a batch entry at all, so it leaves no on-chain trace: rejected and held submissions are left out of the batch (D1 in #43). Switching a reject to `Q_i = 0` instead would be a change here, not in the filters.
 
 ### Everything is config
 
@@ -405,7 +409,7 @@ Faces are excluded by the campaign's own rules, so this filter enforces a **clie
 
 **Blur-and-pass is not implemented.** This stage inspects submissions and never rewrites them, so blurring would be a transform step, not a filter. That is the client decision still open in #28: reject, or blur and keep. Switching to `"action": "flag"` is a config change; blurring would need new machinery.
 
-**Honest limit on the tests.** The positive test uses a *drawn* face, which YuNet detects reliably, alongside checks that the suite's ordinary photos are never flagged. Real photographs are the only real validation, and they arrive with real campaign data: re-measure then, and check whether the client's existing automatic check already covers this before enforcing (#28).
+**Honest limit on the tests.** The positive test uses a *drawn* face, which YuNet detects reliably, alongside checks that the suite's ordinary photos are never flagged. Real photographs are the only real validation: on Crossmodal-3600 (#71) it found a face in 24.6% of ordinary photos, so on the demo it observes ("Would flag", still paid) until the strictness of the no-faces rule is decided.
 
 ## Metrics (issue #24)
 
@@ -511,7 +515,7 @@ report.stopped          # StopReason.DONE, or why it stopped
 report.paid_submission_ids
 ```
 
-**Planning.** A batch holds at most 10 users, each once: that is what one transaction carries (#82). `plan_batches` puts each payable in the earliest batch with room that does not already hold that user, so payment is roughly first come, first served and one prolific contributor never holds up everyone else. A contributor with several submissions spreads across batches, one entry each; whether they should be combined instead is D3 in #43.
+**Planning.** A batch holds at most 10 users, each once: that is what one transaction carries (#82). `plan_batches` puts each payable in the earliest batch with room that does not already hold that user, so payment is roughly first come, first served and one prolific contributor never holds up everyone else. A contributor with several submissions spreads across batches, one entry each, so every payout traces to one submission (D3 in #43).
 
 **Why nobody is paid twice.** The program accepts a batch only when its `batch_sequence` equals the run's `expected_sequence`, then increments it, so at most one transaction per sequence number can ever land. On top of that:
 
@@ -530,7 +534,7 @@ A sequence number that moves any other way means something else is signing with 
 | Lands, but the confirmation is lost | Waits, reads the chain, finds it landed: CONFIRMED, no resend |
 | The validator crashes mid-send | The next `settle` resolves it the same way before doing anything else |
 
-**When it will not send**, leaving every batch queued: the protocol is frozen, the survey is not in a state that allows payouts (Rolling or Refundable once #44 lands), the run is not Active, the run's `validator_authority` is a different key, or the run's stop time is inside the safety margin (5 minutes by default, which must outlast a transaction's lifetime).
+**When it will not send**, leaving every batch queued: the protocol is frozen, the survey is not in a state that allows payouts (Rolling or Refundable), the run is not Active, the run's `validator_authority` is a different key, or the run's stop time is inside the safety margin (5 minutes by default, which must outlast a transaction's lifetime).
 
 **Tested against a simulated chain** that enforces both rules the argument rests on, the sequence check and transaction expiry, and fails each way above on cue. 150 randomised runs mix every failure with crashes and restarts, and check that each confirmed submission was paid exactly once and nothing else was paid. Breaking any of rules 1, 3 or 4 on purpose fails the suite.
 
@@ -543,7 +547,7 @@ A sequence number that moves any other way means something else is signing with 
 
 Tested the same way as the submitter, but with a real restart: 40 randomised runs close and reopen the log from disk before every attempt, crashes included, and nobody is paid twice.
 
-**Not built yet:** the real `ChainClient` for Zyta's program (the instruction, the per-user accounts, reading the run). Q values arrive already mapped from judge scores (M1).
+**The real `ChainClient`** is `SolanaChain`, described in [The Solana client](#the-solana-client-43-m2). Q values arrive already mapped from judge scores (M1).
 
 ## Stage 2: the judge contract (#43, J1)
 
@@ -581,7 +585,7 @@ Rewardable from 40. `DESCRIPTION_MISMATCH`, `NOT_A_PHOTO` and `INSTRUCTIONS_TO_J
 
 **Provenance on every verdict:** model name, `prompt_version` (the rubric version plus a hash of the exact instructions and of the labels around the photo and the description) and `rubric_version`. Any payout traces back to the prompt that produced it, and a reworded prompt is visibly a new version.
 
-**No model client yet, on purpose.** `ModelJudge` takes anything with `name` and `complete(prompt) -> str`. Choosing the model is J4, and whether a contributor's photo may go to a commercial API at all waits on the client (D5 in #43). Until then, `StubJudge` runs the same validation as a real reply, so everything downstream can be built against it.
+**No model client yet, on purpose.** `ModelJudge` takes anything with `name` and `complete(prompt) -> str`. J4 (#77) chose the deterministic stub for the demo (D9): there was no GPU or measured model in the time left. A model replaces it only after the labelled test set and the agreement harness (J2 #75, J3 #76). Contributor content is never sent to a commercial AI API (D5). `StubJudge` runs the same validation as a real reply, so everything downstream is built against it.
 
 ## The validator as a service (#43, R1)
 
@@ -702,7 +706,7 @@ Amounts are in a 6-decimal mint. The demo's run 0 can pay 100,000 base units in 
 
 > **Run on devnet since 2026-10-07.** The first reward batches landed on the first attempt ([sequence 0](https://explorer.solana.com/tx/2N6VYi5WC6pyvfxJ5aeiKmup4MmTe5c7sxBTFL6sJrohsmzxeK9nNQAsT8iFEtFKfGHhMAa1hritfrgLX9ksojqA?cluster=devnet), [sequence 1](https://explorer.solana.com/tx/hePSHMZhYvm1x6QEvpcPFEgWRgKiCAPkLne8t88SYaGaywsTs2bRvder5kgbyfDACPGEUYjuFY5UTPLzidEfbQ3?cluster=devnet)), and the run's counters, the vault and both wallets were checked on chain afterwards. Measured for one user: 502 bytes, exactly what the test predicts, and about 19,000 to 22,000 compute units against a requested 100,000. Only one-user batches have run so far; the unit tests in `tests/test_solana.py` still use a pretend node, and the account layouts are still copied by hand from the program (a drift guard is #83).
 
-**At most 10 users per transaction.** A Solana transaction is at most 1232 bytes. The fixed part is 428 bytes and every user costs 74 (two 32-byte addresses, two index bytes, one 8-byte score): ten users is 1168 bytes, eleven is 1242. `MAX_BATCH_SIZE` is therefore 10, a test pins it, and the program's own limit is being lowered from 64 to match (#82). This holds only while the run's `validator_authority` is the sole signer and fee payer: a second signer costs 96 bytes, and then only 9 fit. More than 10 needs address lookup tables, which is not built.
+**At most 10 users per transaction.** A Solana transaction is at most 1232 bytes. The fixed part is 428 bytes and every user costs 74 (two 32-byte addresses, two index bytes, one 8-byte score): ten users is 1168 bytes, eleven is 1242. `MAX_BATCH_SIZE` is therefore 10 and a test pins it. The program's own limit is still 64; lowering it to match is #82, not done before submission. This holds only while the run's `validator_authority` is the sole signer and fee payer: a second signer costs 96 bytes, and then only 9 fit. More than 10 needs address lookup tables, which is not built.
 
 **One run, chosen by the operator.** The client is given `S2E_RUN_ID` and does not follow a rotation on its own. A sequence number only means something inside one run: if a send from run 0 were resolved by reading run 1, "the chain still expects 0" would look like "it never landed", and the batch would be paid twice. Moving to the next run is a restart with the new id, once the batch log has no send in doubt.
 
@@ -722,7 +726,7 @@ Amounts are in a 6-decimal mint. The demo's run 0 can pay 100,000 base units in 
 
 ## Deploying the demo (#43, R3)
 
-A small Linux server runs the API behind nginx. The demo site (#70) is hosted elsewhere; its backend calls this API with `S2E_API_KEY`.
+A small Linux server runs the API behind nginx; the demo deployment answers at `api.survey2earn.xyz`. The demo site (#70, `web_demo/`) runs on Cloudflare Workers at [survey2earn.xyz](https://survey2earn.xyz); its backend calls this API with `S2E_API_KEY`.
 
 Who can touch what:
 
@@ -763,5 +767,4 @@ Logs: `journalctl -u s2e-validator -f`. A line starting `settlement_halted` mean
 
 ## Open questions
 
-- **REJECT → on-chain** (#12, #28): does a rejected submission get no batch entry at all, or an entry with `Q_i = 0`? This decides whether rejections leave an on-chain trace; it doesn't change this interface.
 - **Existing-photo descriptions**: how contributors pick an existing photo, how many descriptions a photo can receive, and which ones are paid. This affects near-duplicate scoping (#16), not the interaction shape.
