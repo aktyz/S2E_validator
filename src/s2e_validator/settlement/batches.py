@@ -1,6 +1,6 @@
 """Grouping payable submissions into reward batches the program will accept.
 
-`execute_reward_batch` takes at most `MAX_BATCH_SIZE` (64) users, each at most
+`execute_reward_batch` takes at most `MAX_BATCH_SIZE` (10) users, each at most
 once. A contributor with several scored submissions therefore spreads across
 batches, one entry per submission, rather than being combined. That is the
 same total under today's linear reward formula; whether the target tokenomics
@@ -16,8 +16,10 @@ from dataclasses import dataclass
 
 from . import base58
 
-#: `MAX_BATCH_SIZE` in solana/programs/survey2earn/src/constants.rs.
-MAX_BATCH_SIZE = 64
+#: The most users one legacy transaction carries (#82): 428 fixed bytes plus
+#: 74 per user is 1168 of the 1232 allowed at 10, and 1242 at 11. The program's
+#: own `MAX_BATCH_SIZE` (constants.rs) is being lowered to the same number.
+MAX_BATCH_SIZE = 10
 _U64_MAX = 2**64 - 1
 
 

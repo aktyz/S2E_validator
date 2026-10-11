@@ -86,14 +86,14 @@ class TestItSurvivesARestart:
 
     def test_order_and_claims_come_back(self, opened):
         log = opened()
-        for batch in plan_batches(payables(150)):
+        for batch in plan_batches(payables(25)):
             log.add(batch)
 
         log = restart(log, opened)
 
-        assert [len(r.batch.entries) for r in log.records()] == [64, 64, 22]
-        assert log.claimed("sub-149")
-        assert not log.claimed("sub-150")
+        assert [len(r.batch.entries) for r in log.records()] == [10, 10, 5]
+        assert log.claimed("sub-24")
+        assert not log.claimed("sub-25")
 
     def test_a_requeue_is_kept(self, opened):
         log = opened()

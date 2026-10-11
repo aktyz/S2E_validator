@@ -45,7 +45,7 @@ from solders.message import Message
 from solders.pubkey import Pubkey
 from solders.transaction import Transaction
 
-from .batches import Payable
+from .batches import MAX_BATCH_SIZE, Payable
 from .chain import BroadcastResult, Outcome, RunState, Ticket
 from .keys import ValidatorKey
 
@@ -58,7 +58,7 @@ ASSOCIATED_TOKEN_PROGRAM = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25e
 MAX_TRANSACTION_BYTES = 1232
 #: Users per `execute_reward_batch` that fit in one transaction, with the
 #: compute budget instruction. tests/test_solana.py proves this number.
-MAX_USERS_PER_TRANSACTION = 10
+MAX_USERS_PER_TRANSACTION = MAX_BATCH_SIZE
 #: The default budget is 200,000 units per transaction. A batch does a token
 #: transfer and an address derivation per user, so it asks for more, up front.
 #: Estimates, to be replaced by numbers measured on devnet.

@@ -172,16 +172,16 @@ class Rubric:
         )
 
 
-#: The Obywatel Bielik campaign: contributors photograph places, objects and
-#: scenes in Poland and describe them in Polish. Thresholds here are starting
-#: points; J2 and J3 (#43) measure them against hand-labelled submissions.
-BIELIK_RUBRIC = Rubric(
-    version="bielik-v1",
+#: The demo campaign: contributors photograph places, objects and scenes and
+#: describe them. Language is not graded: no criterion asks for one. Thresholds
+#: here are starting points; J2 and J3 (#43) measure them against
+#: hand-labelled submissions.
+RUBRIC_V1 = Rubric(
+    version="rubric-v1",
     campaign_brief=(
-        "Contributors take their own photo of a place, object or everyday scene in "
-        "Poland and write a short description of it in Polish. The descriptions train "
-        "a Polish language model, so a good one says what is actually in this photo, "
-        "specifically enough that it could not describe a different photo."
+        "Contributors take their own photo of a place, object or everyday scene and "
+        "write a short description of it. A good description says what is actually in "
+        "this photo, specifically enough that it could not describe a different photo."
     ),
     criteria=(
         Criterion(
@@ -196,10 +196,6 @@ BIELIK_RUBRIC = Rubric(
             weight=1.5,
         ),
         Criterion(
-            "language",
-            "Is it readable, natural Polish, whatever its length?",
-        ),
-        Criterion(
             "effort",
             "Is it a genuine attempt to help someone who cannot see the photo, rather "
             "than the least text that would be accepted?",
@@ -208,7 +204,7 @@ BIELIK_RUBRIC = Rubric(
     reasons={
         "GENERIC_DESCRIPTION": "The text would fit many photos equally well.",
         "LOW_EFFORT": "The text is a genuine attempt but minimal.",
-        "POOR_LANGUAGE": "The text is hard to read, or not in Polish.",
+        "POOR_LANGUAGE": "The text is hard to read.",
         "PHOTO_HARD_TO_READ": "The photo is too dark, blurred or small to judge.",
         "DESCRIPTION_MISMATCH": "The text describes something that is not in the photo.",
         "NOT_A_PHOTO": "The image is a screenshot, meme, drawing or other non-photo.",

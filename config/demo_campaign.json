@@ -1,0 +1,28 @@
+{
+  "default_mode": "shadow",
+  "filters": {
+    "text_format": {
+      "mode": "enforce",
+      "settings": {
+        "min_chars": 20,
+        "max_chars": 2000,
+        "placeholders": []
+      }
+    },
+    "image_format": {
+      "mode": "enforce",
+      "settings": {
+        "allowed_formats": ["JPEG", "PNG", "WEBP"],
+        "min_width": 256,
+        "min_height": 256
+      }
+    },
+    "image_near_duplicate": {
+      "mode": "shadow",
+      "settings": {
+        "max_distance": 6,
+        "retention_days": 30
+      }
+    }
+  }
+}

@@ -7,7 +7,7 @@ import json
 import pytest
 
 from s2e_validator.judge import (
-    BIELIK_RUBRIC,
+    RUBRIC_V1,
     ImagePart,
     ModelJudge,
     Prompt,
@@ -26,7 +26,7 @@ class TestPromptSafety:
 
     def prompt_for(self, text: str) -> Prompt:
         client = ScriptedClient(reply())
-        ModelJudge(client, BIELIK_RUBRIC).judge(item(text=text))
+        ModelJudge(client, RUBRIC_V1).judge(item(text=text))
         return client.prompts[0]
 
     def test_the_description_arrives_as_one_json_string(self):
@@ -72,7 +72,7 @@ class TestPromptSafety:
 
     def test_flags_are_not_shown_to_the_model(self):
         client = ScriptedClient(reply())
-        ModelJudge(client, BIELIK_RUBRIC).judge(item(flags=["DUPLICATE_IMAGE_TEXT_ONLY"]))
+        ModelJudge(client, RUBRIC_V1).judge(item(flags=["DUPLICATE_IMAGE_TEXT_ONLY"]))
         prompt = client.prompts[0]
 
         rendered = prompt.system + "".join(p.text for p in prompt.content if isinstance(p, TextPart))
@@ -95,33 +95,33 @@ class TestPromptSafety:
 
 class TestPromptVersion:
     def test_stable_for_one_rubric(self):
-        assert prompt_version(BIELIK_RUBRIC) == prompt_version(BIELIK_RUBRIC)
+        assert prompt_version(RUBRIC_V1) == prompt_version(RUBRIC_V1)
 
     def test_changes_when_the_rubric_wording_changes(self):
         reworded = Rubric(
-            version=BIELIK_RUBRIC.version,
-            campaign_brief=BIELIK_RUBRIC.campaign_brief + " Extra sentence.",
-            criteria=BIELIK_RUBRIC.criteria,
-            reasons=BIELIK_RUBRIC.reasons,
-            blocking_reasons=BIELIK_RUBRIC.blocking_reasons,
+            version=RUBRIC_V1.version,
+            campaign_brief=RUBRIC_V1.campaign_brief + " Extra sentence.",
+            criteria=RUBRIC_V1.criteria,
+            reasons=RUBRIC_V1.reasons,
+            blocking_reasons=RUBRIC_V1.blocking_reasons,
         )
 
-        assert prompt_version(reworded) != prompt_version(BIELIK_RUBRIC)
+        assert prompt_version(reworded) != prompt_version(RUBRIC_V1)
 
     @pytest.mark.parametrize("label", ["_PHOTO_LABEL", "_DESCRIPTION_LABEL"])
     def test_changes_when_a_label_the_model_reads_changes(self, label, monkeypatch):
         from s2e_validator.judge import prompt as prompt_module
 
-        before = prompt_version(BIELIK_RUBRIC)
+        before = prompt_version(RUBRIC_V1)
         monkeypatch.setattr(prompt_module, label, getattr(prompt_module, label) + " (reworded)")
 
-        assert prompt_version(BIELIK_RUBRIC) != before
+        assert prompt_version(RUBRIC_V1) != before
 
     def test_the_labels_hashed_are_the_labels_sent(self):
         from s2e_validator.judge import prompt as prompt_module
 
         client = ScriptedClient(reply())
-        ModelJudge(client, BIELIK_RUBRIC).judge(item())
+        ModelJudge(client, RUBRIC_V1).judge(item())
         first, _, last = client.prompts[0].content
 
         assert first.text == prompt_module._PHOTO_LABEL
@@ -129,7 +129,7 @@ class TestPromptVersion:
 
     def test_does_not_depend_on_the_submission(self):
         client = ScriptedClient(reply(), reply())
-        judge = ModelJudge(client, BIELIK_RUBRIC)
+        judge = ModelJudge(client, RUBRIC_V1)
         judge.judge(item(text="Zamek"))
         judge.judge(item(text="Pierogi ruskie na talerzu"))
 

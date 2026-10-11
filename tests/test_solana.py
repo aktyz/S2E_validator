@@ -472,6 +472,22 @@ class TestTheServiceOnSolana:
         with pytest.raises(SettingsError, match="not by this service's key"):
             build_service(ServiceSettings.from_env(env), env)
 
+    def test_it_refuses_to_start_when_one_payout_is_more_than_the_run_can_pay(self, env):
+        """Otherwise every reward would wait as batched, with no error (#87)."""
+        from s2e_validator.api.main import ServiceSettings, SettingsError, build_service
+
+        self.node.accounts[str(VAULT)] = token_account(999)  # the setting asks for up to 1000
+
+        with pytest.raises(SettingsError, match="can only pay 999 more base units"):
+            build_service(ServiceSettings.from_env(env), env)
+
+    def test_it_starts_when_the_maximum_is_exactly_what_the_run_can_pay(self, env):
+        from s2e_validator.api.main import ServiceSettings, build_service
+
+        self.node.accounts[str(VAULT)] = token_account(1000)
+
+        build_service(ServiceSettings.from_env(env), env)
+
     def test_it_refuses_to_start_for_a_run_that_does_not_exist(self, env):
         from s2e_validator.api.main import ServiceSettings, build_service
 

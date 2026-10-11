@@ -31,7 +31,7 @@ def make_interaction(**overrides) -> Interaction:
     """
     fields = {
         "submission_id": "sub-1",
-        "campaign_id": "bielik-mvp",
+        "campaign_id": "demo-mvp",
         "user_id": "user-1",
         "image": NewImage(b"\xff\xd8fake-jpeg", "image/jpeg"),
         "text": "Pomnik Neptuna w Gdańsku",
@@ -138,13 +138,13 @@ class StubFilter(PreFilter):
 
 # -- Stage 2 judge ------------------------------------------------------------
 
-ALL_FOUR = {"relevance": 4, "specificity": 4, "language": 4, "effort": 4}
+ALL_CRITERIA = {"relevance": 4, "specificity": 4, "effort": 4}
 
 
 def reply(criteria=None, reason_codes=(), confidence=0.9, **extra) -> str:
     # A bare string is kept as-is, so a test can send the malformed shape itself.
     codes = reason_codes if isinstance(reason_codes, str) else list(reason_codes)
-    body = {"criteria": criteria or ALL_FOUR, "reason_codes": codes}
+    body = {"criteria": criteria or ALL_CRITERIA, "reason_codes": codes}
     if confidence is not None:
         body["confidence"] = confidence
     body.update(extra)

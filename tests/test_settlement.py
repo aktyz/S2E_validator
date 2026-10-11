@@ -73,22 +73,25 @@ class TestPayable:
 
 
 class TestPlanning:
-    def test_batches_hold_at_most_64(self):
-        batches = plan_batches(payables(150))
+    def test_batches_hold_at_most_ten(self):
+        """What one transaction carries (#82)."""
+        assert MAX_BATCH_SIZE == 10
 
-        assert [len(b.entries) for b in batches] == [64, 64, 22]
+        batches = plan_batches(payables(25))
+
+        assert [len(b.entries) for b in batches] == [10, 10, 5]
 
     def test_each_user_appears_once_per_batch(self):
         """Ten submissions from one prolific contributor spread over ten
-        batches; everyone else still fills the first one."""
+        batches; everyone else still fits in the first one beside them."""
         heavy = [Payable(f"heavy-{i}", wallet(0), 60) for i in range(10)]
-        batches = plan_batches(heavy + payables(50, start=1))
+        batches = plan_batches(heavy + payables(9, start=1))
 
         assert len(batches) == 10
         for batch in batches:
             users = [e.user for e in batch.entries]
             assert len(users) == len(set(users))
-        assert len(batches[0].entries) == 51
+        assert len(batches[0].entries) == 10
 
     def test_order_is_first_come_first_served(self):
         batches = plan_batches(payables(130))
@@ -110,9 +113,9 @@ class TestPlanning:
     def test_batch_rules_hold_even_when_built_by_hand(self):
         with pytest.raises(ValueError, match="at most once"):
             Batch((Payable("a", wallet(1), 1), Payable("b", wallet(1), 1)))
-        with pytest.raises(ValueError, match="1 to 64"):
+        with pytest.raises(ValueError, match="1 to 10"):
             Batch(tuple(payables(MAX_BATCH_SIZE + 1)))
-        with pytest.raises(ValueError, match="1 to 64"):
+        with pytest.raises(ValueError, match="1 to 10"):
             Batch(())
 
 
@@ -121,18 +124,18 @@ class TestHappyPath:
         chain = FakeChain()
         log = InMemoryBatchLog()
 
-        report = submitter(chain, log).settle(payables(150))
+        report = submitter(chain, log).settle(payables(25))
 
         assert report.stopped is StopReason.DONE
         assert [seq for seq, _ in chain.landed] == [0, 1, 2]
-        assert len(report.paid_submission_ids) == 150
+        assert len(report.paid_submission_ids) == 25
         assert report.waiting == ()
         assert_paid_exactly_once(chain, log)
 
     def test_settling_the_same_payables_again_sends_nothing(self):
         chain = FakeChain()
         log = InMemoryBatchLog()
-        items = payables(100)
+        items = payables(15)
         submitter(chain, log).settle(items)
 
         again = submitter(chain, log).settle(items)
@@ -198,7 +201,7 @@ class TestWhenSendingGoesWrong:
         chain = FakeChain(script=["fail", "land"])
         log = InMemoryBatchLog()
 
-        report = submitter(chain, log).settle(payables(70))
+        report = submitter(chain, log).settle(payables(15))
 
         assert [r.status for r in log.records()] == [BatchStatus.FAILED, BatchStatus.CONFIRMED]
         assert log.records()[0].failure == "simulated program error"

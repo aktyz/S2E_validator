@@ -1,7 +1,8 @@
 """The HTTP face of the validator: two calls and a health check.
 
     POST /submissions        a photo, its description and a wallet -> the outcome
-    GET  /submissions/{id}   the outcome again, e.g. once a waiting batch landed
+    GET  /submissions/{id}   the outcome again, e.g. once a waiting batch landed;
+                             202 while it is still being checked
     GET  /healthz            for the uptime monitor; needs no key
 
 **Server to server.** The demo site's backend calls this and holds the API
@@ -26,7 +27,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from ..settlement import SequenceConflict, base58
-from .service import RecordingFailed, ValidatorService
+from .service import RecordingFailed, SubmissionIdTaken, ValidatorService
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,8 @@ DEFAULT_MAX_PHOTO_BYTES = 26 * 1024 * 1024
 MAX_DESCRIPTION_CHARS = 20_000
 #: A Solana address is 32 to 44 base58 characters.
 MAX_WALLET_CHARS = 44
+#: A caller-chosen id has the form this service makes itself: uuid4().hex.
+SUBMISSION_ID_PATTERN = r"^[0-9a-f]{32}$"
 #: Short keys are guessable; a generated one is far longer than this.
 MIN_API_KEY_CHARS = 32
 _READ_CHUNK = 1024 * 1024
@@ -51,11 +54,13 @@ def create_app(
     max_photo_bytes: int = DEFAULT_MAX_PHOTO_BYTES,
     settled_on: str = "devnet",
     settle_interval: float | None = DEFAULT_SETTLE_INTERVAL,
+    version: str = "unknown",
 ) -> FastAPI:
     """`api_key` is what the site's backend sends as `Authorization: Bearer
     <key>`. `settled_on` names the network in responses, so a dry run can
     never be read as a payout. Every `settle_interval` seconds, waiting
-    rewards are tried again; None turns that off."""
+    rewards are tried again; None turns that off. `version` is reported by
+    the health check, so the site can show which service it talks to."""
     if len(api_key) < MIN_API_KEY_CHARS:
         raise ValueError(f"the API key must be at least {MIN_API_KEY_CHARS} characters")
     expected = f"Bearer {api_key}".encode()
@@ -83,7 +88,7 @@ def create_app(
 
     # No interactive docs: they would describe the API to anyone who finds it.
     app = FastAPI(
-        title="Survey2Earn validator", version="0.1.0", lifespan=lifespan,
+        title="Survey2Earn validator", version=version, lifespan=lifespan,
         docs_url=None, redoc_url=None, openapi_url=None,
     )
 
@@ -101,30 +106,46 @@ def create_app(
             content={"detail": "the reward could not be recorded; nothing is owed", "submission_id": str(exc)},
         )
 
+    @app.exception_handler(SubmissionIdTaken)
+    async def submission_id_taken(_: Request, exc: SubmissionIdTaken) -> JSONResponse:
+        # Never a second submission under one id: the first may already be paid.
+        return JSONResponse(status_code=409, content={"detail": "submission_id already used"})
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
-        return {"status": "ok", "settled_on": settled_on}
+        return {"status": "ok", "settled_on": settled_on, "version": version}
 
     @app.post("/submissions", dependencies=[Depends(authorised)])
     async def submit(
         photo: UploadFile = File(..., description="The contributor's photo."),
         description: str = Form(..., max_length=MAX_DESCRIPTION_CHARS),
         wallet: str = Form(..., min_length=32, max_length=MAX_WALLET_CHARS),
+        submission_id: str | None = Form(
+            default=None,
+            pattern=SUBMISSION_ID_PATTERN,
+            description="Optional. The caller's own id, so it can poll before the answer arrives.",
+        ),
     ) -> dict:
         if not _is_solana_address(wallet):
             raise HTTPException(status_code=422, detail="wallet must be a Solana address")
         data = await _read_bounded(photo, max_photo_bytes)
         # The service is synchronous and CPU-bound (decoding, hashing, face
         # detection), so it runs in the worker pool, not on the event loop.
-        outcome = await run_in_threadpool(service.submit, wallet, description, data)
+        outcome = await run_in_threadpool(service.submit, wallet, description, data, submission_id)
         return {**outcome.to_dict(), "settled_on": settled_on}
 
-    @app.get("/submissions/{submission_id}", dependencies=[Depends(authorised)])
-    def result(submission_id: str) -> dict:
+    @app.get("/submissions/{submission_id}", dependencies=[Depends(authorised)], response_model=None)
+    def result(submission_id: str) -> dict | JSONResponse:
+        # In flight first, then the outcome: `submit` stores the outcome before
+        # the id leaves the in-flight set, so a submission that finishes between
+        # the two reads is still found. The other order could answer 404.
+        if service.is_processing(submission_id):
+            # The caller chose this id and is polling before the POST answered.
+            return JSONResponse(status_code=202, content={"submission_id": submission_id, "status": "processing"})
         outcome = service.result(submission_id)
-        if outcome is None:
-            raise HTTPException(status_code=404, detail="unknown submission")
-        return {**outcome.to_dict(), "settled_on": settled_on}
+        if outcome is not None:
+            return {**outcome.to_dict(), "settled_on": settled_on}
+        raise HTTPException(status_code=404, detail="unknown submission")
 
     return app
 

@@ -47,9 +47,9 @@ class TextFormatSettings:
     belongs to the judge, not to a structural check.
     """
 
-    #: A sanity floor, not a copy of the campaign's own rule. Obywatel Bielik
-    #: requires 100 characters, so anything shorter should be impossible through
-    #: their UI; this only catches what arrives another way.
+    #: A sanity floor, not a copy of the campaign's own rule. A campaign whose
+    #: app requires, say, 100 characters makes anything shorter impossible
+    #: through that app; this only catches what arrives another way.
     min_chars: int = 5
     max_chars: int = 2000
     max_control_characters: int = 0
@@ -64,7 +64,7 @@ class TextFormatSettings:
     variety_min_length: int = 8
     min_character_variety: float = 0.5
     #: Campaign placeholder/instruction strings pasted back as the description.
-    #: Empty until Bielik's real app strings are known (see #28).
+    #: Empty until the client app's real strings are known (see #28).
     placeholders: Sequence[str] = field(default_factory=tuple)
     flag_truncated: bool = True
 

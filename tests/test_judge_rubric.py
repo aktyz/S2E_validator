@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from s2e_validator.judge import (
-    BIELIK_RUBRIC,
+    RUBRIC_V1,
     Criterion,
     Provenance,
     Rubric,
@@ -16,27 +16,27 @@ from helpers import photo
 
 class TestRubricScore:
     def test_the_ends_of_the_scale(self):
-        assert BIELIK_RUBRIC.score({n: 5 for n in BIELIK_RUBRIC.criterion_names}) == 100
-        assert BIELIK_RUBRIC.score({n: 1 for n in BIELIK_RUBRIC.criterion_names}) == 0
+        assert RUBRIC_V1.score({n: 5 for n in RUBRIC_V1.criterion_names}) == 100
+        assert RUBRIC_V1.score({n: 1 for n in RUBRIC_V1.criterion_names}) == 0
 
     def test_weights_count(self):
-        """Relevance weighs double: an accurate but plain description outscores
-        a fluent one about something else."""
-        accurate = {"relevance": 5, "specificity": 3, "language": 3, "effort": 3}
-        fluent = {"relevance": 3, "specificity": 3, "language": 5, "effort": 3}
+        """Relevance weighs double: an accurate but brief description outscores
+        a long, effortful one about something else."""
+        accurate = {"relevance": 5, "specificity": 3, "effort": 3}
+        effortful = {"relevance": 3, "specificity": 3, "effort": 5}
 
-        assert BIELIK_RUBRIC.score(accurate) > BIELIK_RUBRIC.score(fluent)
+        assert RUBRIC_V1.score(accurate) > RUBRIC_V1.score(effortful)
 
     def test_threshold_decides_rewardable(self):
-        assert BIELIK_RUBRIC.is_rewardable(40, ())
-        assert not BIELIK_RUBRIC.is_rewardable(39, ())
+        assert RUBRIC_V1.is_rewardable(40, ())
+        assert not RUBRIC_V1.is_rewardable(39, ())
 
-    @pytest.mark.parametrize("code", sorted(BIELIK_RUBRIC.blocking_reasons))
+    @pytest.mark.parametrize("code", sorted(RUBRIC_V1.blocking_reasons))
     def test_a_blocking_reason_overrides_any_score(self, code):
-        assert not BIELIK_RUBRIC.is_rewardable(100, (code,))
+        assert not RUBRIC_V1.is_rewardable(100, (code,))
 
     def test_a_soft_reason_does_not_block(self):
-        assert BIELIK_RUBRIC.is_rewardable(60, ("GENERIC_DESCRIPTION",))
+        assert RUBRIC_V1.is_rewardable(60, ("GENERIC_DESCRIPTION",))
 
     @pytest.mark.parametrize(
         "ratings, score",

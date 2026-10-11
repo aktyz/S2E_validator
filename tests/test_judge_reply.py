@@ -7,7 +7,7 @@ import json
 import pytest
 
 from s2e_validator.judge import (
-    BIELIK_RUBRIC,
+    RUBRIC_V1,
     JudgeReplyInvalid,
     JudgeStatus,
     JudgeVerdict,
@@ -16,24 +16,24 @@ from s2e_validator.judge import (
     parse_reply,
 )
 
-from helpers import ALL_FOUR, item, reply
+from helpers import ALL_CRITERIA, item, reply
 
 class TestReplyValidation:
     def test_a_valid_reply(self):
-        parsed = parse_reply(reply(reason_codes=["LOW_EFFORT"]), BIELIK_RUBRIC)
+        parsed = parse_reply(reply(reason_codes=["LOW_EFFORT"]), RUBRIC_V1)
 
-        assert parsed.criteria == ALL_FOUR
+        assert parsed.criteria == ALL_CRITERIA
         assert parsed.reason_codes == ("LOW_EFFORT",)
         assert parsed.confidence == 0.9
 
     def test_one_markdown_fence_is_tolerated(self):
-        assert parse_reply(f"```json\n{reply()}\n```", BIELIK_RUBRIC).criteria == ALL_FOUR
+        assert parse_reply(f"```json\n{reply()}\n```", RUBRIC_V1).criteria == ALL_CRITERIA
 
     def test_confidence_is_optional(self):
-        assert parse_reply(reply(confidence=None), BIELIK_RUBRIC).confidence is None
+        assert parse_reply(reply(confidence=None), RUBRIC_V1).confidence is None
 
     def test_repeated_reason_codes_count_once(self):
-        parsed = parse_reply(reply(reason_codes=["LOW_EFFORT", "LOW_EFFORT"]), BIELIK_RUBRIC)
+        parsed = parse_reply(reply(reason_codes=["LOW_EFFORT", "LOW_EFFORT"]), RUBRIC_V1)
 
         assert parsed.reason_codes == ("LOW_EFFORT",)
 
@@ -44,13 +44,13 @@ class TestReplyValidation:
             ("[1, 2, 3]", "JSON object"),
             ('Sure! {"criteria": {}}', "not JSON"),
             (reply(score=100), "unexpected keys"),
-            (reply(criteria={"relevance": 4, "specificity": 4, "language": 4}), "missing"),
-            (reply(criteria={**ALL_FOUR, "beauty": 5}), "unexpected"),
-            (reply(criteria={**ALL_FOUR, "relevance": 6}), "1..5"),
-            (reply(criteria={**ALL_FOUR, "relevance": 0}), "1..5"),
-            (reply(criteria={**ALL_FOUR, "relevance": 4.5}), "whole number"),
-            (reply(criteria={**ALL_FOUR, "relevance": "4"}), "whole number"),
-            (reply(criteria={**ALL_FOUR, "relevance": True}), "whole number"),
+            (reply(criteria={"relevance": 4, "specificity": 4}), "missing"),
+            (reply(criteria={**ALL_CRITERIA, "beauty": 5}), "unexpected"),
+            (reply(criteria={**ALL_CRITERIA, "relevance": 6}), "1..5"),
+            (reply(criteria={**ALL_CRITERIA, "relevance": 0}), "1..5"),
+            (reply(criteria={**ALL_CRITERIA, "relevance": 4.5}), "whole number"),
+            (reply(criteria={**ALL_CRITERIA, "relevance": "4"}), "whole number"),
+            (reply(criteria={**ALL_CRITERIA, "relevance": True}), "whole number"),
             (reply(reason_codes=["VERY_GOOD"]), "outside the rubric"),
             (reply(reason_codes="LOW_EFFORT"), "list of strings"),
             (reply(confidence=1.5), "between 0 and 1"),
@@ -66,19 +66,19 @@ class TestReplyValidation:
     )
     def test_anything_off_contract_is_refused(self, raw, message):
         with pytest.raises(JudgeReplyInvalid, match=message):
-            parse_reply(raw, BIELIK_RUBRIC)
+            parse_reply(raw, RUBRIC_V1)
 
 
 class TestVerdict:
     PROVENANCE = Provenance("m", "p", "r")
 
     def test_serialises_to_json(self):
-        verdict = StubJudge(BIELIK_RUBRIC).judge(item(flags=["DUPLICATE_IMAGE_TEXT_ONLY"]))
+        verdict = StubJudge(RUBRIC_V1).judge(item(flags=["DUPLICATE_IMAGE_TEXT_ONLY"]))
 
         payload = json.loads(json.dumps(verdict.to_dict()))
 
         assert payload["quality_score"] == 75
-        assert payload["judge"]["rubric_version"] == "bielik-v1"
+        assert payload["judge"]["rubric_version"] == "rubric-v1"
         assert payload["flags"] == ["DUPLICATE_IMAGE_TEXT_ONLY"]
 
     @pytest.mark.parametrize(

@@ -1,4 +1,5 @@
-"""Source files must not hide characters a reviewer cannot see.
+"""Source files must not hide characters a reviewer cannot see, nor name a
+former counterparty.
 
 Zero-width spaces, joiners, the BOM, variation selectors and the replacement
 character all render as nothing (or as an ambiguous box) in most editors and
@@ -9,9 +10,16 @@ need them spell them as escape sequences instead.
 from __future__ import annotations
 
 import pathlib
+import re
 import unicodedata
 
 VALIDATOR = pathlib.Path(__file__).resolve().parents[1]
+
+#: The outreach is closed, so the name stays out of the code, tests and docs.
+#: Built from parts, so this file does not contain it either.
+_COUNTERPARTY = re.compile("|".join(("bie" + "lik", "obywa" + "tel")), re.IGNORECASE)
+_SCANNED_SUFFIXES = (".py", ".md", ".json", ".toml")
+_SKIPPED_PARTS = (".venv", "__pycache__", ".pytest_cache")
 
 
 def _invisible(char: str) -> bool:
@@ -35,3 +43,23 @@ def test_no_invisible_characters_in_python_source():
     ]
 
     assert not offenders, "Spell these as escape sequences:\n" + "\n".join(offenders)
+
+
+def _scanned(path: pathlib.Path) -> bool:
+    parts = path.relative_to(VALIDATOR).parts
+    return (
+        path.suffix in _SCANNED_SUFFIXES
+        and not any(part in _SKIPPED_PARTS or part.endswith(".egg-info") for part in parts)
+    )
+
+
+def test_no_counterparty_name():
+    offenders = [
+        f"{path.relative_to(VALIDATOR)}:{number}"
+        for path in sorted(VALIDATOR.rglob("*"))
+        if path.is_file() and _scanned(path)
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if _COUNTERPARTY.search(line)
+    ]
+
+    assert not offenders, "Remove the former counterparty's name:\n" + "\n".join(offenders)

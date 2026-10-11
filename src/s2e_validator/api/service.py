@@ -25,6 +25,7 @@ from ..prefilters import Interaction, NewImage, PreFilterPipeline
 from ..clock import utc_now
 from ..settlement import BatchLog, BatchStatus, BatchSubmitter, Payable, SequenceConflict
 from ..settlement.mapping import ScoreMapping
+from .report import FilterReport, JudgeReport, filter_reports
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,12 @@ REASON_NOT_REWARDABLE = "NOT_REWARDABLE"
 class RecordingFailed(RuntimeError):
     """An accepted submission's reward could not be written to the batch log,
     so nothing is owed and nothing will be sent."""
+
+
+class SubmissionIdTaken(ValueError):
+    """A caller-chosen id that is already in use: being processed, answered, or
+    owed a reward. A second submission under it could be shown the first one's
+    outcome, payout included."""
 
 
 DETAIL_SETTLEMENT_UNAVAILABLE = "settlement is temporarily unavailable; the reward stays queued"
@@ -69,6 +76,10 @@ class SubmissionOutcome:
     #: The reward batch's transaction signature, once it landed.
     transaction: str | None = None
     detail: str | None = None
+    #: Each Stage 1 check that ran, through the whitelist in report.py.
+    filters: tuple[FilterReport, ...] = ()
+    #: The judge's model and ratings; None when Stage 1 rejected the submission.
+    judge: JudgeReport | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +93,8 @@ class SubmissionOutcome:
             "reward_display": self.reward_display,
             "transaction": self.transaction,
             "detail": self.detail,
+            "filters": [report.to_dict() for report in self.filters],
+            "judge": self.judge.to_dict() if self.judge is not None else None,
         }
 
 
@@ -108,6 +121,8 @@ class ValidatorService:
         self._campaign_id = campaign_id
         self._clock = clock
         self._outcomes: dict[str, SubmissionOutcome] = {}
+        #: Ids whose submission is still being checked, judged or settled.
+        self._in_flight: set[str] = set()
         self._lock = threading.Lock()
 
     def preflight(self) -> None:
@@ -120,19 +135,34 @@ class ValidatorService:
         """`wallet` is the contributor's Solana address: who they are to Stage 1
         and where the reward goes. It must already be registered for the
         survey (a UserSurvey account and a token account); the demo site does
-        that on a visitor's first submission."""
+        that on a visitor's first submission.
+
+        `submission_id` lets the caller hand the id out before the answer
+        arrives; one already in use raises SubmissionIdTaken."""
         submission_id = submission_id or uuid.uuid4().hex
-        interaction = Interaction(
-            submission_id=submission_id,
-            campaign_id=self._campaign_id,
-            user_id=wallet,
-            image=NewImage(photo),
-            text=description,
-            # Stamped here, on receipt: the velocity filter measures rates on
-            # this, so it must never be a time the contributor chose.
-            submitted_at=self._clock(),
-        )
-        return self._remember(self._process(interaction))
+        self._claim(submission_id)
+        try:
+            interaction = Interaction(
+                submission_id=submission_id,
+                campaign_id=self._campaign_id,
+                user_id=wallet,
+                image=NewImage(photo),
+                text=description,
+                # Stamped here, on receipt: the velocity filter measures rates on
+                # this, so it must never be a time the contributor chose.
+                submitted_at=self._clock(),
+            )
+            # Remembered before the id leaves the in-flight set, so a reader
+            # never finds it in neither.
+            return self._remember(self._process(interaction))
+        finally:
+            with self._lock:
+                self._in_flight.discard(submission_id)
+
+    def is_processing(self, submission_id: str) -> bool:
+        """True while the submission is still being checked, judged or settled."""
+        with self._lock:
+            return submission_id in self._in_flight
 
     def result(self, submission_id: str) -> SubmissionOutcome | None:
         with self._lock:
@@ -144,6 +174,19 @@ class ValidatorService:
     def settle_pending(self) -> None:
         """Send whatever is still queued, e.g. once the run has become active."""
         self._submitter.settle([])
+
+    def _claim(self, submission_id: str) -> None:
+        """Mark an id as in flight, refusing one already in use.
+
+        The batch log is read first, outside the lock: it outlives a restart,
+        which the outcomes in memory do not. A reward that could not be recorded
+        leaves no trace anywhere, so its id may be tried again.
+        """
+        owed = self._batch_log.record_for(submission_id) is not None
+        with self._lock:
+            if owed or submission_id in self._outcomes or submission_id in self._in_flight:
+                raise SubmissionIdTaken(submission_id)
+            self._in_flight.add(submission_id)
 
     # -- the journey -----------------------------------------------------------
 
@@ -161,6 +204,7 @@ class ValidatorService:
                 if r.result is not None and r.result.reason_code
             )
         )
+        checks = filter_reports(stage.records)
         if not stage.proceeds_to_judge:
             return SubmissionOutcome(
                 submission_id,
@@ -168,12 +212,19 @@ class ValidatorService:
                 reason_code=stage.reason_code,
                 rejected_by=stage.decided_by,
                 flags=flags,
+                filters=checks,
             )
 
         verdict = self._judge.judge(JudgeInput(interaction, flags))
+        judged = JudgeReport.of(verdict)
         if verdict.status is JudgeStatus.HELD:
             return SubmissionOutcome(
-                submission_id, SubmissionState.HELD, reason_code=verdict.hold_reason, flags=flags
+                submission_id,
+                SubmissionState.HELD,
+                reason_code=verdict.hold_reason,
+                flags=flags,
+                filters=checks,
+                judge=judged,
             )
         units = self._mapping.units(verdict)
         if units == 0:
@@ -186,12 +237,16 @@ class ValidatorService:
                 ),
                 flags=flags,
                 quality_score=verdict.quality_score,
+                filters=checks,
+                judge=judged,
             )
 
         accepted = SubmissionOutcome(
             submission_id,
             SubmissionState.BATCHED,
             flags=flags,
+            filters=checks,
+            judge=judged,
             quality_score=verdict.quality_score,
             reward_units=units,
             reward_display=self._mapping.display(units),

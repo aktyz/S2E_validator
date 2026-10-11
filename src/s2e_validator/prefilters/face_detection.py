@@ -1,6 +1,6 @@
 """Face detection: the campaign's own rule, not a quality judgement.
 
-Obywatel Bielik excludes photos of people's faces, so this filter enforces a
+The campaign excludes photos of people's faces, so this filter enforces a
 client rule rather than deciding whether a contribution is good. A small local
 model keeps it inside the "no paid or remote call, bounded local CPU" premise.
 """

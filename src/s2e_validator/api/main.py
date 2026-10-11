@@ -29,11 +29,13 @@ import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as installed_version
 from pathlib import Path
 
 from fastapi import FastAPI
 
-from ..judge import BIELIK_RUBRIC, StubJudge
+from ..judge import RUBRIC_V1, StubJudge
 from ..prefilters import FilterDependencies, build_pipeline, load_config
 from ..settlement import (
     MAX_BATCH_SIZE,
@@ -54,6 +56,8 @@ logger = logging.getLogger(__name__)
 
 #: Stands in for the validator's address in a dry run, where nothing is signed.
 _DRY_RUN_SIGNER = base58.encode(bytes(32))
+#: The distribution name in pyproject.toml.
+_DISTRIBUTION = "s2e-validator"
 
 
 class SettingsError(ValueError):
@@ -117,7 +121,7 @@ def build_service(
         pipeline=build_pipeline(load_config(settings.pipeline_config), FilterDependencies()),
         # The demo runs a stub judge by decision: it shows the filters and the
         # settlement, and no contributor content goes to any model.
-        judge=StubJudge(BIELIK_RUBRIC),
+        judge=StubJudge(RUBRIC_V1),
         # One attempt per call: when a send gets no answer, the request ends
         # as "batched" after the client's confirmation wait (about a minute),
         # and the retry loop resolves it in the background. Otherwise a call
@@ -170,12 +174,28 @@ def _chain(settings: ServiceSettings, env: Mapping[str, str]) -> tuple[ChainClie
             f"run {run_id} of survey {survey_id} is paid by {state.validator_authority}, "
             f"not by this service's key {key.public_key}"
         )
+    if state.budget is not None and settings.max_units_per_submission > state.budget:
+        # Otherwise every reward would wait as "batched" until the run closes,
+        # with no error anywhere.
+        raise SettingsError(
+            f"S2E_MAX_UNITS_PER_SUBMISSION is {settings.max_units_per_submission}, but run {run_id} "
+            f"can only pay {state.budget} more base units. Lower the payout scale or fund the run."
+        )
     logger.info(
         "chain_ready network=%s program=%s survey=%d run=%d expected_sequence=%d run_active=%s",
         key.network.value, env["S2E_PROGRAM_ID"], survey_id, run_id,
         state.expected_sequence, state.run_active,
     )
     return chain, key.public_key, key.network.value, solana.MAX_USERS_PER_TRANSACTION
+
+
+def service_version() -> str:
+    """The installed package's version (pyproject.toml), refreshed by the
+    deploy's `pip install`; "unknown" when running from a plain checkout."""
+    try:
+        return installed_version(_DISTRIBUTION)
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def build_app() -> FastAPI:
@@ -188,4 +208,4 @@ def build_app() -> FastAPI:
     )
     settings = ServiceSettings.from_env()
     service, network = build_service(settings)
-    return create_app(service, api_key=settings.api_key, settled_on=network)
+    return create_app(service, api_key=settings.api_key, settled_on=network, version=service_version())

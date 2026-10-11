@@ -73,7 +73,7 @@ Two optional extras, neither needed by the pipeline itself: `api` (FastAPI, uvic
 | `src/s2e_validator/prefilters/velocity.py` | `SubmissionVelocityFilter` (#20), `SubmissionTimesStore` |
 | `src/s2e_validator/prefilters/metrics.py` | `StageMetrics`: per-filter counts, latency, reject rate, judge calls saved (#24) |
 | `src/s2e_validator/settlement/keys.py` | `load_validator_key()`: the signing key, loaded strictly (#43 M3) |
-| `src/s2e_validator/settlement/batches.py` | `Payable`, `plan_batches()`: at most 64 users, each once per batch (#43 M2) |
+| `src/s2e_validator/settlement/batches.py` | `Payable`, `plan_batches()`: at most 10 users, each once per batch (#43 M2) |
 | `src/s2e_validator/settlement/submitter.py` | `BatchSubmitter`: sends batches in sequence, resolves every doubt on-chain (#43 M2) |
 | `src/s2e_validator/settlement/log.py` | `BatchLog`: every batch recorded before it is sent |
 | `src/s2e_validator/settlement/chain.py` | `ChainClient`: what the submitter needs from Solana, library-free |
@@ -82,12 +82,13 @@ Two optional extras, neither needed by the pipeline itself: `api` (FastAPI, uvic
 | `src/s2e_validator/settlement/dry_run.py` | `DryRunChain`: settles nothing, and says so |
 | `src/s2e_validator/settlement/solana.py` | `SolanaChain`: builds, signs and sends `execute_reward_batch` (`solana` extra) |
 | `src/s2e_validator/api/service.py` | `ValidatorService`: filter, judge, price, settle; no web framework |
+| `src/s2e_validator/api/report.py` | The whitelist for `filters` and `judge` in an outcome |
 | `src/s2e_validator/api/app.py` | The HTTP layer: two calls and a health check (`api` extra) |
 | `src/s2e_validator/api/main.py` | Starts the service from environment settings |
 | `src/s2e_validator/tools/` | `new_key`, `demo_wallets`: command-line tools for operating the demo |
 | `deploy/` | Server setup script, systemd unit, nginx config, settings example |
 | `src/s2e_validator/filelock.py` | `FileLock`: an exclusive lock the OS releases if the process dies |
-| `src/s2e_validator/judge/rubric.py` | `Rubric`, `Criterion`, `BIELIK_RUBRIC`: what the judge grades, per campaign (#43) |
+| `src/s2e_validator/judge/rubric.py` | `Rubric`, `Criterion`, `RUBRIC_V1`: what the judge grades, per campaign (#43) |
 | `src/s2e_validator/judge/contract.py` | `JudgeInput`, `JudgeVerdict` (SCORED / HELD), strict `parse_reply()` |
 | `src/s2e_validator/judge/prompt.py` | Provider-neutral `Prompt`; the description goes in as data |
 | `src/s2e_validator/judge/judge.py` | `ModelJudge` (any `ModelClient`, retries, holds) and `StubJudge` |
@@ -158,7 +159,7 @@ Re-measured after the lock, the suspicion log and the second (per-user) key clai
 | 50,000 submissions loaded | ~1.0 s |
 | Single lookup against a 50k store | ~0.02 ms |
 
-At Bielik's 1M-photo target the store holds roughly 100 MB of keys, which is the point at which the durable store matters more than speed. `tests/test_image_duplicate_volume.py` re-checks the order of magnitude on every run.
+At a 1M-photo campaign the store holds roughly 100 MB of keys, which is the point at which the durable store matters more than speed. `tests/test_image_duplicate_volume.py` re-checks the order of magnitude on every run.
 
 ### Open: releasing a claim when a submission is rejected later
 
@@ -184,7 +185,7 @@ Two filters, because text and photo fail in unrelated ways and a campaign may wa
 | Single token, few distinct characters: `asdfasdf` | `TEXT_LOW_CHARACTER_VARIETY` - **FLAG** | `variety_min_length: 8`, `min_character_variety: 0.5` |
 | Ends mid-word on a hyphen | `TEXT_LOOKS_TRUNCATED` — **FLAG** | `flag_truncated: true` |
 
-`min_chars: 5` is a sanity floor, not a copy of the campaign's rule. Obywatel Bielik requires 100 characters, so anything shorter cannot arrive through their UI; this only catches what comes another way.
+`min_chars: 5` is a sanity floor, not a copy of the campaign's rule. A campaign whose app requires, say, 100 characters makes anything shorter impossible through that app; this only catches what comes another way. The demo campaign sets its own minimum in `config/demo_campaign.json`.
 
 **Only category Cc counts as a control character.** Category Cf includes U+200D, which joins every multi-part emoji, plus zero-width spaces and the BOM that ride along with pasted text. Counting those rejected "Zamek w Malborku 👩‍💻" under the default of zero, which is exactly the false reject this stage is meant to avoid.
 
@@ -192,7 +193,7 @@ Two filters, because text and photo fail in unrelated ways and a campaign may wa
 
 **Low character variety is a flag, not a reject.** "Mississippi" scores 0.36, the same as `asdfasdf`. A structural check cannot separate them, so it hands both to the judge with the observation attached.
 
-**`placeholders` is empty until Bielik's real app strings are known** (#28). The check is exact-match on the normalised text, so a description that merely starts with the placeholder wording still passes.
+**`placeholders` is empty until the client app's real strings are known** (#28). The check is exact-match on the normalised text, so a description that merely starts with the placeholder wording still passes.
 
 ### `image_format` (cost_rank 12)
 
@@ -294,7 +295,7 @@ Fingerprints are cached by a **digest** of the input, never the input itself: ke
 
 `same_user_max_distance: 10`, `cross_user_max_distance: 4`, image `max_distance: 10`.
 
-**These are synthetic measurements, and the honest-pair floor rests on a single pair.** Noise photos have independent hashes by construction, so they say little about two honest photos of the same landmark from the same viewpoint, which is the campaign's normal case and can land much closer. A false positive there is not free: cross-user it downgrades an honest contributor to text-only. Recalibration against real Bielik submissions is #27, and nothing here should be enforced before it.
+**These are synthetic measurements, and the honest-pair floor rests on a single pair.** Noise photos have independent hashes by construction, so they say little about two honest photos of the same landmark from the same viewpoint, which is the campaign's normal case and can land much closer. A false positive there is not free: cross-user it downgrades an honest contributor to text-only. Recalibration against real campaign submissions is #27, and nothing here should be enforced before it.
 
 ### Measured latency (Python 3.11.9, Windows laptop)
 
@@ -404,7 +405,7 @@ Faces are excluded by the campaign's own rules, so this filter enforces a **clie
 
 **Blur-and-pass is not implemented.** This stage inspects submissions and never rewrites them, so blurring would be a transform step, not a filter. That is the client decision still open in #28: reject, or blur and keep. Switching to `"action": "flag"` is a config change; blurring would need new machinery.
 
-**Honest limit on the tests.** The positive test uses a *drawn* face, which YuNet detects reliably, alongside checks that the suite's ordinary photos are never flagged. Real photographs are the only real validation, and they arrive with the Bielik data: re-measure then, and check whether the client's existing automatic check already covers this before enforcing (#28).
+**Honest limit on the tests.** The positive test uses a *drawn* face, which YuNet detects reliably, alongside checks that the suite's ordinary photos are never flagged. Real photographs are the only real validation, and they arrive with real campaign data: re-measure then, and check whether the client's existing automatic check already covers this before enforcing (#28).
 
 ## Metrics (issue #24)
 
@@ -510,7 +511,7 @@ report.stopped          # StopReason.DONE, or why it stopped
 report.paid_submission_ids
 ```
 
-**Planning.** `execute_reward_batch` takes at most 64 users, each once. `plan_batches` puts each payable in the earliest batch with room that does not already hold that user, so payment is roughly first come, first served and one prolific contributor never holds up everyone else. A contributor with several submissions spreads across batches, one entry each; whether they should be combined instead is D3 in #43.
+**Planning.** A batch holds at most 10 users, each once: that is what one transaction carries (#82). `plan_batches` puts each payable in the earliest batch with room that does not already hold that user, so payment is roughly first come, first served and one prolific contributor never holds up everyone else. A contributor with several submissions spreads across batches, one entry each; whether they should be combined instead is D3 in #43.
 
 **Why nobody is paid twice.** The program accepts a batch only when its `batch_sequence` equals the run's `expected_sequence`, then increments it, so at most one transaction per sequence number can ever land. On top of that:
 
@@ -549,25 +550,26 @@ Tested the same way as the submitter, but with a real restart: 40 randomised run
 A vision model looks at the photo and the description together and rates them against a campaign rubric. Scope and open decisions are in #43; this is the first piece, the contract, and it makes no model call yet.
 
 ```python
-from s2e_validator.judge import BIELIK_RUBRIC, JudgeInput, StubJudge
+from s2e_validator.judge import RUBRIC_V1, JudgeInput, StubJudge
 
-verdict = StubJudge(BIELIK_RUBRIC).judge(JudgeInput(interaction, flags=("DUPLICATE_IMAGE_TEXT_ONLY",)))
+verdict = StubJudge(RUBRIC_V1).judge(JudgeInput(interaction, flags=("DUPLICATE_IMAGE_TEXT_ONLY",)))
 verdict.to_dict()
 # {"status": "SCORED", "quality_score": 75, "is_rewardable": true,
 #  "criteria": {"relevance": 4, ...}, "reason_codes": [], "flags": [...],
-#  "judge": {"model": "stub", "prompt_version": "bielik-v1/…", "rubric_version": "bielik-v1"}, ...}
+#  "judge": {"model": "stub", "prompt_version": "rubric-v1/…", "rubric_version": "rubric-v1"}, ...}
 ```
 
 **A judge failure is never a score.** A reply that is missing, not JSON, off-vocabulary or out of range is retried, then **HELD**: no score, not rewardable, a `hold_reason`, and a person decides. Defaulting it to 0 would punish a contributor for our outage; defaulting it to anything higher would pay for a submission nobody judged. The same applies when the photo cannot be loaded or its type cannot be read from its bytes; the type the uploader declared is never used. `judge()` never raises: `parse_reply` turns anything wrong with a reply, including one built to crash a JSON parser, into the same hold.
 
 **The model rates, the code scores.** The model rates each criterion from 1 to 5; `Rubric.score()` turns the ratings into 0 to 100 as a weighted mean, computed exactly, with a half rounding up, so anything that recomputes a score gets the same number. A model asked for "a score out of 100" clusters and drifts, and a number it invents cannot be checked. Ratings per criterion can be compared one by one against human labels (J3).
 
-| Bielik criterion | Weight | Question |
+| `rubric-v1` criterion | Weight | Question |
 |---|---|---|
 | `relevance` | 2 | Does it describe what is actually in this photo? |
 | `specificity` | 1.5 | Concrete details of *this* photo, or words that fit any photo? |
-| `language` | 1 | Readable, natural Polish? |
 | `effort` | 1 | A genuine attempt, or the least text that would pass? |
+
+No criterion grades the language: the demo asks for English as guidance only, and no filter checks it (#17).
 
 Rewardable from 40. `DESCRIPTION_MISMATCH`, `NOT_A_PHOTO` and `INSTRUCTIONS_TO_JUDGE` make a submission unrewardable whatever the ratings. Every rubric must list `INSTRUCTIONS_TO_JUDGE` as blocking, and refuses to load otherwise, because every prompt asks the judge to use it. These are starting points; J2 and J3 measure them against hand-labelled submissions before anything is enforced.
 
@@ -586,9 +588,10 @@ Rewardable from 40. `DESCRIPTION_MISMATCH`, `NOT_A_PHOTO` and `INSTRUCTIONS_TO_J
 One submission in, one outcome out. **Server to server:** the demo site's backend calls it with an API key (`Authorization: Bearer <key>`); a browser never does, so there is no CORS and no public documentation page.
 
 ```
-POST /submissions        multipart: photo, description, wallet
-GET  /submissions/{id}   the same outcome again, e.g. once a waiting reward landed
-GET  /healthz            no key needed
+POST /submissions        multipart: photo, description, wallet, and optionally submission_id
+GET  /submissions/{id}   the same outcome again, e.g. once a waiting reward landed;
+                         202 while the submission is still being checked
+GET  /healthz            no key needed: {"status": "ok", "settled_on": …, "version": …}
 ```
 
 ```bash
@@ -601,9 +604,22 @@ curl -H "Authorization: Bearer $S2E_API_KEY" \
 {
   "submission_id": "5f0c...", "state": "paid", "settled_on": "devnet",
   "quality_score": 75, "reward_units": 75, "reward_display": "0.000075",
-  "transaction": "4vJ9...", "flags": [], "reason_code": null, "rejected_by": null, "detail": null
+  "transaction": "4vJ9...", "flags": [], "reason_code": null, "rejected_by": null, "detail": null,
+  "filters": [
+    {"name": "text_format", "mode": "enforce", "verdict": "PASS", "reason_code": null},
+    {"name": "image_format", "mode": "enforce", "verdict": "PASS", "reason_code": null},
+    {"name": "image_exact_duplicate", "mode": "shadow", "verdict": "PASS", "reason_code": null},
+    ...
+  ],
+  "judge": {"model": "stub", "criteria": {"relevance": 4, "specificity": 4, "effort": 4}}
 }
 ```
+
+**`filters` and `judge` are a whitelist** (`api/report.py`).
+
+- **Each check that ran:** its name, its mode (`enforce` or `shadow`), its verdict (`PASS`, `FLAG`, `REJECT`, or `ERROR` for a check that crashed and failed open) and its reason code. A shadow `REJECT` is what the check *would* have rejected. Checks after an enforced reject never ran and are not listed.
+- **The judge:** the model's name and its ratings. `judge` is `null` when Stage 1 rejected the submission, and `criteria` is empty for a held verdict.
+- **Nothing else leaves.** Not a filter's `details` (a duplicate's details name the first submission and when it arrived), its confidence or a crash message; not the judge's prompt or rubric version.
 
 | `state` | Meaning |
 |---|---|
@@ -616,9 +632,21 @@ curl -H "Authorization: Bearer $S2E_API_KEY" \
 
 The call answers once the submission is decided, so the plan's passing steps (received, checked, scored) are not separate states here: `not_rewarded`, `batched` and `paid` all mean it was scored.
 
+**The caller may choose the id.** `submission_id` is optional: 32 lowercase hex characters, the form the service uses itself (`uuid4().hex`); anything else is a 422. The demo site sends its own, so it can give the visitor the id before the answer arrives and poll for it:
+
+| `GET /submissions/{id}` | When |
+|---|---|
+| `200` with the outcome | The submission is decided (above) |
+| `202 {"submission_id": "…", "status": "processing"}` | It is still being checked, judged or settled |
+| `404` | The service does not know the id, e.g. after a restart |
+
+An id that is being processed, already has an outcome, or is owed a reward in the batch log is refused with `409`: a second submission under one id could otherwise be shown the first one's payout. The batch log survives a restart, so a paid id stays taken.
+
 `wallet` is the contributor's Solana address: who they are to Stage 1, and where the reward goes. It must already be registered for the survey (a UserSurvey account and a token account for the reward mint), which the demo site does on a visitor's first submission. A wallet that is not registered ends as `failed`, because the program refuses the batch; the service does not check registration first.
 
 `service.py` holds everything that decides an outcome and has no web framework in it; `app.py` only checks the key, bounds what comes in (photo size while reading, field lengths, a well-formed address) and turns outcomes into JSON. The service calls `pipeline.preflight()` before it serves, so it refuses to start with a filter that cannot run.
+
+**`/healthz` names the version** from `pyproject.toml`, as installed: the deploy's `pip install` refreshes it, and a plain checkout reports `unknown`. Raise it whenever the API changes, so the demo site can show which service it talks to.
 
 **`settled_on` is in every answer.** It is `dry-run` when nothing reaches Solana, and a dry run's signatures start with `dryrun-`, so a made-up settlement can never be read as a payout. `S2E_CHAIN` has no default for the same reason: a deployment has to say whether it pays.
 
@@ -637,6 +665,10 @@ uvicorn --factory s2e_validator.api.main:build_app
 
 Every setting is listed in `api/main.py`.
 
+### The technical demo
+
+`python demo/run_demo.py` starts the service on this machine and sends it six prepared submissions over HTTP, as the demo site's backend would: junk text and a non-photo are rejected with a reason, an honest submission is scored and paid, the same photo again and a re-saved copy from someone else are not rewarded, and a second honest submission is paid. It settles nothing by default and says so. Pass `--photo-a` and `--photo-b` to use your own photos, and set the `S2E_CHAIN=solana` variables with `--wallet-a` and `--wallet-b` (two registered wallets) to pay on devnet. `config/demo_campaign.json` is the campaign it runs: format checks enforced, everything else observing.
+
 ### From a score to a payout (#43, M1)
 
 `ScoreMapping` is a pure function of the judge's score, the Stage 1 flags and static config. Nothing in it learns or adapts; tuning changes a config value, never logic.
@@ -646,12 +678,14 @@ Every setting is listed in `api/main.py`.
 - **A duplicate photo pays nothing**, exact or near, the contributor's own or someone else's. On the demo site Stage 1 only observes, so this rule is what stops a re-uploaded photo being paid. To make that work, the service hands the mapping everything Stage 1 flagged *and* everything it would have rejected had the filter been enforced.
 - **No lower rate for text-only contributions yet.** Every photo on the demo site is an upload, so there is no setting for pooled photos; it comes back when they do.
 
-| Score | `units_per_point` 10,000, 6-decimal mint |
-|---|---|
-| 100 | 1.000000 |
-| 75 (every stub verdict) | 0.750000 |
-| 40 (the lowest rewardable) | 0.400000 |
-| below 40, held, or a duplicate photo | nothing; left out of the batch |
+| Score | Demo: `units_per_point` 1 | `units_per_point` 10,000 |
+|---|---|---|
+| 100 | 100 base units = 0.000100 | 1.000000 |
+| 75 (every stub verdict) | 75 = 0.000075 | 0.750000 |
+| 40 (the lowest rewardable) | 40 = 0.000040 | 0.400000 |
+| below 40, held, or a duplicate photo | nothing; left out of the batch | nothing |
+
+Amounts are in a 6-decimal mint. The demo's run 0 can pay 100,000 base units in total, so it runs at 1 unit per point with a maximum of 100, which covers about 1,300 paid submissions (#87). With `S2E_CHAIN=solana` the service refuses to start if `S2E_MAX_UNITS_PER_SUBMISSION` is more than the run can still pay: otherwise every reward would wait as `batched` with no error.
 
 ### Known limits
 
@@ -666,9 +700,9 @@ Every setting is listed in `api/main.py`.
 
 `settlement/solana.py` is the `ChainClient` for the deployed program: it reads the run's state, builds and signs `execute_reward_batch`, sends it and reports whether it landed. Signing and address derivation come from `solders`; the RPC calls are plain JSON over HTTPS from the standard library.
 
-> **Not yet run against a cluster.** Everything in `tests/test_solana.py` runs against a pretend node. The account layouts and the instruction are copied from the program as of #47; the first real batch on devnet is still to come, and the compute budget numbers are estimates until then.
+> **Run on devnet since 2026-10-07.** The first reward batches landed on the first attempt ([sequence 0](https://explorer.solana.com/tx/2N6VYi5WC6pyvfxJ5aeiKmup4MmTe5c7sxBTFL6sJrohsmzxeK9nNQAsT8iFEtFKfGHhMAa1hritfrgLX9ksojqA?cluster=devnet), [sequence 1](https://explorer.solana.com/tx/hePSHMZhYvm1x6QEvpcPFEgWRgKiCAPkLne8t88SYaGaywsTs2bRvder5kgbyfDACPGEUYjuFY5UTPLzidEfbQ3?cluster=devnet)), and the run's counters, the vault and both wallets were checked on chain afterwards. Measured for one user: 502 bytes, exactly what the test predicts, and about 19,000 to 22,000 compute units against a requested 100,000. Only one-user batches have run so far; the unit tests in `tests/test_solana.py` still use a pretend node, and the account layouts are still copied by hand from the program (a drift guard is #83).
 
-**At most 10 users per transaction, not 64.** The program allows 64 users per batch, but a Solana transaction is at most 1232 bytes and every user costs 74 of them (two 32-byte addresses, two index bytes, one 8-byte score). Ten users is 1168 bytes; eleven is 1242. The service plans batches of `MAX_USERS_PER_TRANSACTION`, and a test pins the number. Reaching 64 needs address lookup tables, which is not built.
+**At most 10 users per transaction.** A Solana transaction is at most 1232 bytes. The fixed part is 428 bytes and every user costs 74 (two 32-byte addresses, two index bytes, one 8-byte score): ten users is 1168 bytes, eleven is 1242. `MAX_BATCH_SIZE` is therefore 10, a test pins it, and the program's own limit is being lowered from 64 to match (#82). This holds only while the run's `validator_authority` is the sole signer and fee payer: a second signer costs 96 bytes, and then only 9 fit. More than 10 needs address lookup tables, which is not built.
 
 **One run, chosen by the operator.** The client is given `S2E_RUN_ID` and does not follow a rotation on its own. A sequence number only means something inside one run: if a send from run 0 were resolved by reading run 1, "the chain still expects 0" would look like "it never landed", and the batch would be paid twice. Moving to the next run is a restart with the new id, once the batch log has no send in doubt.
 

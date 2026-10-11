@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import threading
 
 import pytest
 
@@ -12,7 +14,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from s2e_validator.api import SubmissionState, ValidatorService  # noqa: E402
 from s2e_validator.api.app import create_app, settle_periodically  # noqa: E402
-from s2e_validator.judge import BIELIK_RUBRIC, JudgeVerdict, Provenance, StubJudge  # noqa: E402
+from s2e_validator.api.service import SubmissionIdTaken  # noqa: E402
+from s2e_validator.judge import RUBRIC_V1, JudgeVerdict, Provenance, StubJudge  # noqa: E402
 from s2e_validator.prefilters import (  # noqa: E402
     FilterMode,
     PipelineConfig,
@@ -32,6 +35,8 @@ OTHER_CAPTION = "Mój własny opis tego zamku, zupełnie inny od poprzedniego wp
 API_KEY = "test-key-" + "k" * 32
 AUTH = {"Authorization": f"Bearer {API_KEY}"}
 VISITOR, OTHER_VISITOR = wallet(1), wallet(2)
+#: An id as the demo site makes them: uuid4().hex.
+SITE_ID = "0123456789abcdef0123456789abcdef"
 #: The demo site's setting: every filter observes, none stops a submission.
 OBSERVE_ONLY = PipelineConfig(default_mode=FilterMode.SHADOW)
 
@@ -45,7 +50,7 @@ class Stage:
         self.log = InMemoryBatchLog()
         self.service = ValidatorService(
             pipeline=pipeline or build_pipeline(ENFORCE_ALL),
-            judge=judge or StubJudge(BIELIK_RUBRIC),
+            judge=judge or StubJudge(RUBRIC_V1),
             submitter=BatchSubmitter(self.chain, self.log, SIGNER, clock=lambda: NOW),
             batch_log=self.log,
             mapping=mapping or ScoreMapping(max_units_per_submission=1_000_000),
@@ -65,10 +70,13 @@ def client(stage):
         yield test_client
 
 
-def submit(client, description=CASTLE, photo=None, wallet=VISITOR, headers=AUTH):
+def submit(client, description=CASTLE, photo=None, wallet=VISITOR, headers=AUTH, submission_id=None):
+    data = {"description": description, "wallet": wallet}
+    if submission_id is not None:
+        data["submission_id"] = submission_id
     return client.post(
         "/submissions",
-        data={"description": description, "wallet": wallet},
+        data=data,
         files={"photo": ("photo.jpg", photo if photo is not None else big_photo(), "image/jpeg")},
         headers=headers,
     )
@@ -162,6 +170,80 @@ class TestDuplicatePhotosAreNeverPaid:
         assert "TEXT_REPEATED_CHARACTERS" in body["flags"]
 
 
+class TestWhatTheOutcomeSaysAboutTheChecks:
+    """`filters` and `judge` name each field that leaves (api/report.py).
+    Nothing else of a filter's result or a verdict reaches the caller."""
+
+    def test_every_check_and_the_judge_are_reported(self, client):
+        body = submit(client).json()
+
+        assert body["filters"][:2] == [
+            {"name": "text_format", "mode": "enforce", "verdict": "PASS", "reason_code": None},
+            {"name": "image_format", "mode": "enforce", "verdict": "PASS", "reason_code": None},
+        ]
+        assert all(set(row) == {"name", "mode", "verdict", "reason_code"} for row in body["filters"])
+        assert len({row["name"] for row in body["filters"]}) == len(body["filters"])
+        assert body["judge"] == {"model": "stub", "criteria": {"relevance": 4, "specificity": 4, "effort": 4}}
+
+    def test_a_copied_photo_never_reveals_the_first_submission(self):
+        """A duplicate's details carry the first submission's id and time."""
+        observing = Stage(pipeline=build_pipeline(OBSERVE_ONLY))
+        with TestClient(observing.app) as client:
+            first = submit(client, wallet=VISITOR).json()
+            response = submit(client, description=OTHER_CAPTION, wallet=OTHER_VISITOR)
+            fetched = client.get(f"/submissions/{response.json()['submission_id']}", headers=AUTH)
+
+        for text in (response.text, fetched.text):
+            assert first["submission_id"] not in text
+            assert "first_submission_id" not in text and "first_seen_at" not in text
+        rows = {row["name"]: row for row in response.json()["filters"]}
+        assert rows["image_exact_duplicate"] == {
+            "name": "image_exact_duplicate", "mode": "shadow", "verdict": "FLAG",
+            "reason_code": "DUPLICATE_IMAGE_TEXT_ONLY",
+        }
+
+    def test_an_own_re_upload_is_an_observed_reject(self):
+        observing = Stage(pipeline=build_pipeline(OBSERVE_ONLY))
+        with TestClient(observing.app) as client:
+            first = submit(client).json()
+            response = submit(client, description=OTHER_CAPTION)
+
+        assert first["submission_id"] not in response.text
+        rows = {row["name"]: row for row in response.json()["filters"]}
+        assert rows["image_exact_duplicate"] == {
+            "name": "image_exact_duplicate", "mode": "shadow", "verdict": "REJECT",
+            "reason_code": "DUPLICATE_IMAGE_SAME_USER",
+        }
+
+    def test_an_enforced_reject_lists_only_the_checks_that_ran(self, client):
+        body = submit(client, description="aaaaaaaaaa").json()
+
+        assert body["filters"] == [
+            {"name": "text_format", "mode": "enforce", "verdict": "REJECT", "reason_code": "TEXT_REPEATED_CHARACTERS"},
+        ]
+        assert body["judge"] is None
+
+    def test_a_crashed_check_is_an_error_without_its_message(self):
+        class Crashes(StubFilter):
+            def check(self, interaction):
+                raise RuntimeError("internal path /var/lib/s2e/keys")
+
+        crashing = Stage(
+            pipeline=PreFilterPipeline(
+                [Crashes("fragile", 10, PreFilterResult.passed())],
+                PipelineConfig(default_mode=FilterMode.ENFORCE),
+            )
+        )
+        with TestClient(crashing.app) as client:
+            response = submit(client)
+
+        assert response.json()["state"] == "paid"  # fail open
+        assert response.json()["filters"] == [
+            {"name": "fragile", "mode": "enforce", "verdict": "ERROR", "reason_code": None},
+        ]
+        assert "internal path" not in response.text
+
+
 class TestTheJudge:
     def test_a_held_verdict_pays_nothing_and_says_why(self):
         class AlwaysHolds:
@@ -174,10 +256,12 @@ class TestTheJudge:
 
         assert body["state"] == "held"
         assert body["reason_code"] == "JUDGE_UNAVAILABLE"
+        # The model's name only: never the prompt ("p") or rubric ("r") version.
+        assert body["judge"] == {"model": "m", "criteria": {}}
         assert held.chain.broadcasts == 0
 
     def test_a_low_score_is_not_rewarded(self):
-        low = Stage(judge=StubJudge(BIELIK_RUBRIC, ratings={n: 1 for n in BIELIK_RUBRIC.criterion_names}))
+        low = Stage(judge=StubJudge(RUBRIC_V1, ratings={n: 1 for n in RUBRIC_V1.criterion_names}))
         with TestClient(low.app) as client:
             body = submit(client).json()
 
@@ -186,7 +270,7 @@ class TestTheJudge:
         assert low.chain.broadcasts == 0
 
     def test_a_blocking_reason_is_reported(self):
-        blocked = Stage(judge=StubJudge(BIELIK_RUBRIC, reason_codes=("INSTRUCTIONS_TO_JUDGE",)))
+        blocked = Stage(judge=StubJudge(RUBRIC_V1, reason_codes=("INSTRUCTIONS_TO_JUDGE",)))
         with TestClient(blocked.app) as client:
             body = submit(client).json()
 
@@ -310,6 +394,139 @@ class TestWhenTheRewardCannotBeRecorded:
             assert client.get(f"/submissions/{failed['submission_id']}", headers=AUTH).status_code == 404
 
 
+class Gate:
+    """A judge that answers only once the test lets it, so a submission can be
+    caught while it is still being processed."""
+
+    def __init__(self):
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self._stub = StubJudge(RUBRIC_V1)
+
+    def judge(self, item):
+        self.entered.set()
+        self.release.wait(10)
+        return self._stub.judge(item)
+
+
+class TestTheSitesSubmissionId:
+    """The site hands out its own id, so it can poll before the POST answers."""
+
+    def test_the_sites_id_is_used(self, client):
+        body = submit(client, submission_id=SITE_ID).json()
+
+        assert body["submission_id"] == SITE_ID
+        assert client.get(f"/submissions/{SITE_ID}", headers=AUTH).json() == body
+
+    def test_without_one_the_service_makes_its_own(self, client):
+        assert re.fullmatch(r"[0-9a-f]{32}", submit(client).json()["submission_id"])
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["0123456789ABCDEF0123456789ABCDEF", "0" * 31, "0" * 33, "../" + "0" * 29, "sub-1"],
+        ids=["uppercase", "short", "long", "path", "not-hex"],
+    )
+    def test_a_malformed_id_is_refused_before_any_work(self, client, stage, bad):
+        response = submit(client, submission_id=bad)
+
+        assert response.status_code == 422
+        assert stage.log.records() == [] and stage.chain.broadcasts == 0
+
+    def test_an_id_already_answered_is_refused(self, client, stage):
+        assert submit(client, submission_id=SITE_ID).json()["state"] == "paid"
+
+        response = submit(client, description=OTHER_CAPTION, photo=big_photo(2), submission_id=SITE_ID)
+
+        assert response.status_code == 409
+        assert response.json() == {"detail": "submission_id already used"}
+        assert stage.chain.broadcasts == 1
+
+    def test_an_id_owed_a_reward_is_refused_after_a_restart(self):
+        """The outcomes in memory are gone after a restart; the batch log is not."""
+        before = Stage()
+        with TestClient(before.app) as client:
+            submit(client, submission_id=SITE_ID)
+        restarted = ValidatorService(
+            pipeline=build_pipeline(ENFORCE_ALL),
+            judge=StubJudge(RUBRIC_V1),
+            submitter=BatchSubmitter(before.chain, before.log, SIGNER, clock=lambda: NOW),
+            batch_log=before.log,
+            mapping=ScoreMapping(max_units_per_submission=1_000_000),
+            clock=lambda: NOW,
+        )
+
+        with pytest.raises(SubmissionIdTaken):
+            restarted.submit(OTHER_VISITOR, OTHER_CAPTION, big_photo(2), SITE_ID)
+        assert before.chain.broadcasts == 1
+
+    def test_an_id_being_processed_reads_as_processing_and_cannot_be_reused(self):
+        gate = Gate()
+        slow = Stage(judge=gate)
+        with TestClient(slow.app) as client:
+            worker = threading.Thread(
+                target=slow.service.submit, args=(VISITOR, CASTLE, big_photo(), SITE_ID)
+            )
+            worker.start()
+            try:
+                assert gate.entered.wait(10)
+                processing = client.get(f"/submissions/{SITE_ID}", headers=AUTH)
+                reused = submit(client, description=OTHER_CAPTION, photo=big_photo(2), submission_id=SITE_ID)
+            finally:
+                gate.release.set()
+                worker.join(10)
+            done = client.get(f"/submissions/{SITE_ID}", headers=AUTH)
+
+        assert processing.status_code == 202
+        assert processing.json() == {"submission_id": SITE_ID, "status": "processing"}
+        assert reused.status_code == 409
+        assert done.status_code == 200 and done.json()["state"] == "paid"
+        assert not slow.service.is_processing(SITE_ID)
+
+    def test_a_submission_finishing_mid_poll_is_never_unknown(self):
+        """The submission finishes right after the poll reads the outcome. A
+        poll that read the outcome first would miss it there, then find the id
+        no longer in flight, and answer 404."""
+        gate = Gate()
+        slow = Stage(judge=gate)
+        worker = threading.Thread(target=slow.service.submit, args=(VISITOR, CASTLE, big_photo(), SITE_ID))
+        read_outcome = slow.service.result
+
+        def read_then_finish(submission_id):
+            outcome = read_outcome(submission_id)
+            gate.release.set()
+            worker.join(10)
+            return outcome
+
+        slow.service.result = read_then_finish
+        with TestClient(slow.app) as client:
+            worker.start()
+            try:
+                assert gate.entered.wait(10)
+                polled = client.get(f"/submissions/{SITE_ID}", headers=AUTH)
+            finally:
+                gate.release.set()
+                worker.join(10)
+
+        assert polled.status_code == 202
+
+    def test_processing_still_needs_the_key(self):
+        gate = Gate()
+        slow = Stage(judge=gate)
+        with TestClient(slow.app) as client:
+            worker = threading.Thread(
+                target=slow.service.submit, args=(VISITOR, CASTLE, big_photo(), SITE_ID)
+            )
+            worker.start()
+            try:
+                assert gate.entered.wait(10)
+                response = client.get(f"/submissions/{SITE_ID}")
+            finally:
+                gate.release.set()
+                worker.join(10)
+
+        assert response.status_code == 401
+
+
 class TestRetryingWaitingRewards:
     def run(self, service, rounds: int) -> list[float]:
         """Run the retry loop for `rounds` sleeps, then cancel it."""
@@ -366,7 +583,7 @@ def test_only_the_newest_outcomes_are_kept():
     stage = Stage()
     small = ValidatorService(
         pipeline=build_pipeline(ENFORCE_ALL),
-        judge=StubJudge(BIELIK_RUBRIC),
+        judge=StubJudge(RUBRIC_V1),
         submitter=BatchSubmitter(stage.chain, stage.log, SIGNER, clock=lambda: NOW),
         batch_log=stage.log,
         mapping=ScoreMapping(max_units_per_submission=100),
@@ -405,7 +622,28 @@ class TestOnlyTheSiteMayCall:
             assert client.get(path).status_code == 404
 
     def test_health_needs_no_key(self, client):
-        assert client.get("/healthz").json() == {"status": "ok", "settled_on": "test"}
+        assert client.get("/healthz").json() == {"status": "ok", "settled_on": "test", "version": "unknown"}
+
+    def test_health_reports_the_version(self, stage):
+        with TestClient(create_app(stage.service, api_key=API_KEY, version="9.9.9")) as client:
+            assert client.get("/healthz").json()["version"] == "9.9.9"
+
+    def test_the_version_is_the_installed_package(self, monkeypatch):
+        from s2e_validator.api import main
+
+        monkeypatch.setattr(main, "installed_version", lambda name: f"{name} 1.2.3")
+        assert main.service_version() == "s2e-validator 1.2.3"
+
+    def test_a_plain_checkout_reports_an_unknown_version(self, monkeypatch):
+        from importlib.metadata import PackageNotFoundError
+
+        from s2e_validator.api import main
+
+        def not_installed(name):
+            raise PackageNotFoundError(name)
+
+        monkeypatch.setattr(main, "installed_version", not_installed)
+        assert main.service_version() == "unknown"
 
     def test_there_is_no_browser_access(self, client):
         response = client.get("/healthz", headers={"Origin": "https://demo.example"})

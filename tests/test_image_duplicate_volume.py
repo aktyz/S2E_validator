@@ -1,6 +1,6 @@
 """Volume check for the duplicate store (issue #15 acceptance criterion).
 
-Bielik's stated target is ~1M photos total; a busy campaign day is far below the
+A large campaign targets ~1M photos total; a busy campaign day is far below the
 50k entries loaded here. Bounds are deliberately loose so the test measures order
 of magnitude, not machine speed. Measured numbers live in validator/README.md.
 """

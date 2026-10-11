@@ -185,6 +185,6 @@ def build_pipeline(
 
 
 def load_config(path: str | Path) -> PipelineConfig:
-    """Read a JSON config file, e.g. `campaigns/bielik.json`."""
+    """Read a JSON config file, e.g. `config/demo_campaign.json`."""
     with Path(path).open(encoding="utf-8") as handle:
         return PipelineConfig.from_dict(json.load(handle))

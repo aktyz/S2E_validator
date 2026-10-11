@@ -1,7 +1,7 @@
 """Issue #21: faces are excluded by the campaign's own rules.
 
 The positive case uses a *drawn* face. Real photographs are the only honest
-validation, and they arrive with the Bielik data; see the README note.
+validation, and they arrive with real campaign data; see the README note.
 """
 
 import io
