@@ -20,7 +20,9 @@ SURVEY_ID, RUN_ID = 7, 2
 MINT = Keypair().pubkey()
 AUTHORITY = Keypair().pubkey()
 VALIDATOR = Keypair()
-STOP = datetime(2026, 10, 12, tzinfo=timezone.utc)
+# Far in the future: the service tests run on the real clock, and a run that
+# has stopped pays nothing.
+STOP = datetime(2100, 1, 1, tzinfo=timezone.utc)
 NOW = STOP - timedelta(days=3)
 
 SURVEY = Pubkey.find_program_address([b"survey_config", struct.pack("<Q", SURVEY_ID)], PROGRAM)[0]
