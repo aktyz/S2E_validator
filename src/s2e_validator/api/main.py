@@ -21,6 +21,16 @@ With `S2E_CHAIN=solana`, also (needs the `solana` extra):
 | `S2E_SURVEY_ID`, `S2E_RUN_ID` | The survey and the one run this service pays from. |
 | `S2E_VALIDATOR_KEYPAIR`, `S2E_NETWORK`, `S2E_VALIDATOR_PUBKEY` | The signing key (see settlement/keys.py). |
 | `S2E_DUST_TOKEN_ACCOUNT` | Optional. The program authority's token account, if it is not the associated one. |
+
+The judge (default `S2E_JUDGE=stub`: fixed ratings, no content reaches a model):
+
+| Variable | Meaning |
+|---|---|
+| `S2E_JUDGE` | `stub` or `model`. |
+| `S2E_JUDGE_URL` | With `model`: the self-hosted server's OpenAI-compatible base URL, e.g. `https://judge.example.org/v1`. https, or http to this machine. Required. |
+| `S2E_JUDGE_MODEL` | With `model`: the served model's name. Required. |
+| `S2E_JUDGE_API_KEY` | Optional. Sent as a bearer token to that server; never logged. |
+| `S2E_JUDGE_TIMEOUT` | Optional. Seconds per model call (default 60). |
 """
 
 from __future__ import annotations
@@ -35,7 +45,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from ..judge import RUBRIC_V1, StubJudge
+from ..judge import RUBRIC_V1, Judge, ModelJudge, StubJudge
+from ..judge.chat_client import ChatCompletionsClient
 from ..prefilters import FilterDependencies, build_pipeline, load_config
 from ..settlement import (
     MAX_BATCH_SIZE,
@@ -119,9 +130,7 @@ def build_service(
     service = ValidatorService(
         # Stage 1 state is in memory for now; the durable stores are #50.
         pipeline=build_pipeline(load_config(settings.pipeline_config), FilterDependencies()),
-        # The demo runs a stub judge by decision: it shows the filters and the
-        # settlement, and no contributor content goes to any model.
-        judge=StubJudge(RUBRIC_V1),
+        judge=_judge(environ if environ is not None else os.environ),
         # One attempt per call: when a send gets no answer, the request ends
         # as "batched" after the client's confirmation wait (about a minute),
         # and the retry loop resolves it in the background. Otherwise a call
@@ -135,6 +144,30 @@ def build_service(
         ),
     )
     return service, network
+
+
+def _judge(env: Mapping[str, str]) -> Judge:
+    kind = env.get("S2E_JUDGE", "stub")
+    if kind == "stub":
+        # Shows the filters and the settlement; no contributor content goes to
+        # any model.
+        return StubJudge(RUBRIC_V1)
+    if kind != "model":
+        raise SettingsError(f"S2E_JUDGE must be stub or model, got {kind!r}")
+    missing = [name for name in ("S2E_JUDGE_URL", "S2E_JUDGE_MODEL") if not env.get(name)]
+    if missing:
+        raise SettingsError(f"S2E_JUDGE=model also needs {', '.join(missing)}")
+    try:
+        client = ChatCompletionsClient(
+            env["S2E_JUDGE_URL"],
+            env["S2E_JUDGE_MODEL"],
+            api_key=env.get("S2E_JUDGE_API_KEY") or None,
+            timeout=float(env.get("S2E_JUDGE_TIMEOUT", "60")),
+        )
+    except ValueError as exc:
+        raise SettingsError(f"judge settings: {exc}") from None
+    logger.info("judge model=%s", client.name)
+    return ModelJudge(client, RUBRIC_V1)
 
 
 def _chain(settings: ServiceSettings, env: Mapping[str, str]) -> tuple[ChainClient, str, str, int]:

@@ -1,9 +1,9 @@
 """Judges: the real one wraps a model client; the stub needs no model at all.
 
-No model client lives in this package yet. Choosing one is J4 (#43), and
-sending a contributor's photo to a commercial API waits on the client's answer
-(D5). Everything here is testable, and everything downstream buildable, with
-the stub.
+The model client is `chat_client.ChatCompletionsClient`, for an open model
+the campaign serves on its own GPU through an OpenAI-compatible server. No
+contributor photo goes to a commercial API (D5). Everything here is testable,
+and everything downstream buildable, with the stub.
 """
 
 from __future__ import annotations
