@@ -440,8 +440,9 @@ class TestRetention:
 
 class TestConcurrentClaims:
     def test_only_one_of_many_threads_wins_a_key(self):
-        store = InMemoryImageKeyStore()
         now = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
+        # Its own clock: on the real one this entry expires 30 days after `now`.
+        store = InMemoryImageKeyStore(clock=lambda: now)
         barrier = threading.Barrier(16)
         results: list[bool] = []
         lock = threading.Lock()

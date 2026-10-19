@@ -1,0 +1,4 @@
+# Files that run on the Linux server must keep Unix line endings on every
+# checkout and in every `git archive`, also on Windows.
+*.sh text eol=lf
+deploy/* text eol=lf
