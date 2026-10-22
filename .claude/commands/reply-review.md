@@ -1,8 +1,15 @@
+---
+description: Draft pending replies to every open review thread on a PR, as a script the author runs
+argument-hint: <PR> [review-id …]
+---
+
 # Reply to a PR Review
 
 You are helping the **author** of a pull request on the **Survey2Earn validator** repository (the off-chain quality validator, split out of the Survey2Earn monorepo) answer the review comments they received. The result is a script that adds one reply under every review thread as a **pending (draft) review**, so nothing is visible to anyone until the author checks the replies and submits them from the GitHub web app.
 
-`$ARGUMENTS`: `<PR number> [<review id> …]`. With review ids, only threads from those reviews are answered; without, every open thread is (see Step 2). If the PR number is missing, ask for it before doing anything else.
+Arguments for this run: $ARGUMENTS
+
+Expected form: `<PR number> [<review id> …]`. Review ids are the numbers in `#pullrequestreview-<id>` URLs. With review ids, only threads from those reviews are answered; without, every open thread is (see Step 2). If the PR number is missing, ask for it before doing anything else.
 
 ---
 
@@ -32,17 +39,37 @@ The skill runs in exactly **two request rounds**, then writes its output.
 
 ### Round 1 — the review and the branch state
 
-One message with these three commands, then wait.
+One message with these five commands, then wait. `{owner}` and `{repo}` are filled in by `gh` from the repository's GitHub remote.
 
 ```bash
-cd <repo-root> && gh pr view <PR> --json number,title,url,author,headRefName,headRefOid,body,reviews
+cd <repo-root> && gh pr view <PR> --json number,title,url,author,headRefName,headRefOid,body
 ```
-*Prints the PR's title, URL, author, head branch and commit, description, and every submitted review with its id, author, state and summary body.*
+*Prints the PR's title, URL, author, head branch and commit, and description.*
+
+```bash
+cd <repo-root> && gh api "repos/{owner}/{repo}/pulls/<PR>/reviews" --paginate --jq '.[] | {id, user: .user.login, state, body}'
+```
+*Lists every submitted review with its numeric id, author, state and summary body. This is the same kind of id the inline comments carry in `pull_request_review_id`, so the two can be matched.*
 
 ```bash
 cd <repo-root> && gh api "repos/{owner}/{repo}/pulls/<PR>/comments" --paginate --jq '.[] | {id, node_id, pull_request_review_id, in_reply_to_id, user: .user.login, path, line, original_line, created_at, body}'
 ```
-*Lists every inline review comment on the PR, one JSON object each: its ids, the review it belongs to, the comment it replies to (if any), the author, the file and line, and the text. `{owner}` and `{repo}` are filled in by `gh` from the repository's GitHub remote.*
+*Lists every inline review comment on the PR, one JSON object each: its ids, the review it belongs to, the comment it replies to (if any), the author, the file and line, and the text.*
+
+```bash
+cd <repo-root> && gh api graphql --paginate -F owner='{owner}' -F name='{repo}' -F pr=<PR> -f query='
+query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $endCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id isResolved comments(first: 1) { nodes { databaseId } } }
+      }
+    }
+  }
+}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | {thread: .id, isResolved, root: .comments.nodes[0].databaseId}'
+```
+*Lists every review thread: its id (which the reply script needs), whether the reviewer has marked it resolved, and the id of its first comment, which matches the `id` of a root comment in the previous output.*
 
 ```bash
 git -C <repo-root> rev-parse HEAD && git -C <repo-root> status --short
@@ -55,9 +82,10 @@ From the Round 1 output:
 
 1. **Threads to answer.** A thread is identified by its **root comment**, the one with `in_reply_to_id: null`. Answer a root comment when:
    - its author is not the PR author;
-   - no later comment in the same thread (same `in_reply_to_id` chain) was written by the PR author;
-   - if review ids were given in `$ARGUMENTS`, its `pull_request_review_id` is one of them.
-2. **Review summaries.** Every review `body` in scope that asks a question or requests something not tied to a line gets one answer. All these answers go into a single **summary reply** (see Step 4), because a pending review can only carry one body.
+   - the most recent comment in the thread (by `created_at`, across the root and every comment whose `in_reply_to_id` is the root's id) was not written by the PR author;
+   - its thread, matched by `root` in the thread list, has `isResolved: false`;
+   - if review ids were given in the arguments, its `pull_request_review_id` is one of them.
+2. **Review summaries.** Every review `body` in scope that asks a question or requests something not tied to a line gets one answer. All these answers go into a single **summary reply** (see *Writing the Replies*), which the script sets as the pending review's body.
 3. **Classify each item**:
 
    | Class | Meaning | What the reply says |
@@ -101,14 +129,14 @@ A claim you cannot verify from the files is not written as **Done**. Ask about i
 
 > **Why GraphQL and not REST?** `POST /repos/<owner>/<repo>/pulls/<number>/comments/<id>/replies` always **publishes** the reply immediately. REST `POST …/pulls/<number>/reviews` can create a pending review, but its `comments` cannot reply to an existing thread. The GraphQL mutation `addPullRequestReviewThreadReply` can add a reply to an existing thread **inside a pending review**, so that is what the script uses. Do not "simplify" it back to REST.
 
-Write it with one `Write` call, from this template. Fill in `OWNER`, `NAME` and `PR` from the Round 1 `url`, and add one `reply` call per root comment id, in the order the comments appear in the review:
+Write it with one `Write` call, from this template. Fill in `OWNER`, `NAME` and `PR` from the Round 1 `url`, the summary reply into `SUMMARY`, and one `reply` call per thread picked in Step 2, in the order the comments appear in the review:
 
 ````bash
 #!/usr/bin/env bash
-# Adds replies to the review threads of PR #<number> as PENDING review comments.
+# Adds replies to the review threads of PR #<number> as PENDING review comments,
+# and sets the summary below as the pending review's body.
 # Nothing is visible to others until you submit the review on GitHub
-# ("Files changed" → "Finish your review"). Paste the summary printed at the end
-# into the review body when you submit.
+# ("Files changed" → "Finish your review").
 # Submit only after the fixes are on GitHub, so each "done" matches the pushed code.
 # Re-running adds every reply a second time to the same pending review.
 set -euo pipefail
@@ -116,6 +144,11 @@ set -euo pipefail
 OWNER="<owner>"
 NAME="<repo>"
 PR=<number>
+
+SUMMARY=$(cat <<'REPLY_EOF'
+<summary reply>
+REPLY_EOF
+)
 
 # PR node id and your own pending review on it, if one exists (only yours is visible)
 read -r PR_ID PENDING_ID < <(gh api graphql -f owner="$OWNER" -f name="$NAME" -F pr="$PR" -f query='
@@ -129,46 +162,31 @@ query($owner: String!, $name: String!, $pr: Int!) {
 }' --jq '.data.repository.pullRequest | "\(.id) \(.reviews.nodes[0].id // "")"')
 
 if [[ -z "${PENDING_ID}" ]]; then
-  PENDING_ID=$(gh api graphql -f prId="$PR_ID" -f query='
-mutation($prId: ID!) {
-  addPullRequestReview(input: { pullRequestId: $prId }) { pullRequestReview { id } }
+  PENDING_ID=$(gh api graphql -f prId="$PR_ID" -f body="$SUMMARY" -f query='
+mutation($prId: ID!, $body: String!) {
+  addPullRequestReview(input: { pullRequestId: $prId, body: $body }) { pullRequestReview { id } }
 }' --jq '.data.addPullRequestReview.pullRequestReview.id')
-  echo "started a pending review"
+  echo "started a pending review with the summary as its body"
 else
-  echo "reusing your existing pending review (its earlier comments stay in it)"
+  gh api graphql -f reviewId="$PENDING_ID" -f body="$SUMMARY" -f query='
+mutation($reviewId: ID!, $body: String!) {
+  updatePullRequestReview(input: { pullRequestReviewId: $reviewId, body: $body }) { pullRequestReview { id } }
+}' > /dev/null
+  echo "reusing your existing pending review (its earlier comments stay; its body is replaced by the summary)"
 fi
 
-# "<root comment REST id> <thread node id>" for every review thread
-THREADS=$(gh api graphql --paginate -f owner="$OWNER" -f name="$NAME" -F pr="$PR" -f query='
-query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $pr) {
-      reviewThreads(first: 100, after: $endCursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes { id comments(first: 1) { nodes { databaseId } } }
-      }
-    }
-  }
-}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | "\(.comments.nodes[0].databaseId) \(.id)"')
-
 reply() {
-  local thread
-  thread=$(awk -v c="$1" '$1 == c { print $2 }' <<< "$THREADS")
-  if [[ -z "$thread" ]]; then
-    echo "no review thread found for comment $1 (is it a thread's root comment?)" >&2
-    exit 1
-  fi
-  gh api graphql -f reviewId="$PENDING_ID" -f threadId="$thread" -f body="$2" -f query='
+  gh api graphql -f reviewId="$PENDING_ID" -f threadId="$1" -f body="$2" -f query='
 mutation($reviewId: ID!, $threadId: ID!, $body: String!) {
   addPullRequestReviewThreadReply(input: {
     pullRequestReviewId: $reviewId, pullRequestReviewThreadId: $threadId, body: $body
   }) { comment { id } }
 }' > /dev/null
-  echo "pending reply added to comment $1"
+  echo "pending reply added to thread $1"
 }
 
-# 1. <file> — <one-line topic of the reviewer's comment>
-reply <root comment id> "$(cat <<'REPLY_EOF'
+# 1. <file> — <one-line topic of the reviewer's comment> (root comment <id>)
+reply <thread id> "$(cat <<'REPLY_EOF'
 <reply text, GitHub Markdown>
 REPLY_EOF
 )"
@@ -176,21 +194,16 @@ REPLY_EOF
 # … one block per thread …
 
 echo
-echo "All replies are pending. Open https://github.com/${OWNER}/${NAME}/pull/${PR}/files,"
-echo "check them, then use 'Finish your review' with this text as the review body:"
-echo "----------------------------------------------------------------------"
-cat <<'REPLY_EOF'
-<summary reply>
-REPLY_EOF
-echo "----------------------------------------------------------------------"
+echo "All replies and the summary are pending. Open https://github.com/${OWNER}/${NAME}/pull/${PR}/files,"
+echo "check them, then use 'Finish your review' to submit."
 ````
 
-Rules for filling it in:
+Rules for filling in:
 
-1. **Root comment ids only.** `reply` takes the id of the thread's first comment (`in_reply_to_id: null`), because that is how the script finds the thread.
-2. **Quoted heredocs, delimiter `REPLY_EOF`.** `<<'REPLY_EOF'` keeps backticks, `$` and `\` literal, so reply text needs no escaping. A reply must never contain a line that is exactly `REPLY_EOF`.
-3. **One comment line above each block**, naming the file and the reviewer's point, so the author can find a reply quickly.
-4. **No summary questions?** Keep the printed block anyway, with just the thank-you sentence.
+1. **Thread ids only.** `reply` takes the `thread` value from the Round 1 thread list, the entry whose `root` is the root comment's `id`. Never pass a comment id.
+2. **Quoted heredocs, delimiter `REPLY_EOF`.** `<<'REPLY_EOF'` keeps backticks, `$` and `\` literal, so reply text needs no escaping. A reply or the summary must never contain a line that is exactly `REPLY_EOF`.
+3. **One comment line above each block**, naming the file, the reviewer's point and the root comment id, so the author can find a reply quickly.
+4. **No summary questions?** Keep `SUMMARY` anyway, with just the thank-you sentence.
 5. **The script agrees with the triage**: every thread picked in Step 2 has exactly one block. None is added, softened or dropped.
 
 ---
@@ -203,11 +216,11 @@ Rules for filling it in:
    ```bash
    bash <repo-root>/docs/reviews/PR_<number>_REPLIES_<YYYYMMDD>.sh
    ```
-   *Adds every reply to your pending review on PR #<number>, printing one line per reply, then prints the summary text to paste when you submit. Nothing is published until you click "Finish your review" in the PR's Files tab.*
+   *Adds every reply to your pending review on PR #<number> and sets the summary as the review body, printing one line per step. Nothing is published until you click "Finish your review" in the PR's Files tab.*
 
 3. Add, only when they apply:
    - the branch-state warning from Step 2 (fixes not on GitHub yet);
-   - that an existing pending review will be reused, with its earlier comments;
+   - that an existing pending review will be reused, with its earlier comments, and its body replaced by the summary;
    - replies that promise a change the author still has to make.
 4. Then stop. Do not run the script.
 
@@ -215,7 +228,7 @@ Rules for filling it in:
 
 | Error | Fix |
 |---|---|
-| `no review thread found for comment <id>` | The id is not a thread's root comment. Replace it with the root id (follow `in_reply_to_id` up) and hand the command over again. Delete the pending review first, or remove the blocks that already ran, to avoid duplicates. |
-| GraphQL error naming `pullRequestReviewId` or `addPullRequestReviewThreadReply` (schema changed) | Switch `reply` to `addPullRequestReviewComment(input: { pullRequestReviewId: $reviewId, inReplyTo: $commentNodeId, body: $body })`, passing the comment's `node_id` from Round 1 instead of the thread lookup. |
-| `Could not resolve to a node` | Check `OWNER`, `NAME` and `PR` against the Round 1 `url`. |
+| `Could not resolve to a node` before any reply was added | Check `OWNER`, `NAME` and `PR` against the Round 1 `url`. |
+| `Could not resolve to a node` on a `reply` | The thread id is wrong. Take it again from the Round 1 thread list and hand the command over again. Delete the pending review first, or remove the blocks that already ran, to avoid duplicates. |
+| GraphQL error naming `addPullRequestReview`, `updatePullRequestReview`, `addPullRequestReviewThreadReply` or one of their input fields | The schema changed. Do not guess a replacement: fetch https://docs.github.com/en/graphql/reference/pulls, update the mutation to match, and hand the command over again. |
 | `HTTP 401` / `403` | The `gh` account lacks access. Ask the user to check `gh auth status`. |
