@@ -120,12 +120,38 @@ class TestWhereItMaySend:
             ChatCompletionsClient(url, "m")
 
     @pytest.mark.parametrize(
-        "kwargs", [{"model": ""}, {"temperature": 3.0}, {"max_tokens": 0}, {"timeout": 0}]
+        "kwargs",
+        [
+            {"model": ""},
+            {"temperature": 3.0},
+            {"max_tokens": 0},
+            {"timeout": 0},
+            {"timeout": float("nan")},
+            {"timeout": float("inf")},
+        ],
     )
     def test_bad_settings_are_refused(self, kwargs):
         settings = {"base_url": URL, "model": "m", **kwargs}
         with pytest.raises(ValueError):
             ChatCompletionsClient(**settings)
+
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.openai.com/v1",
+            "https://API.OpenAI.com/v1",
+            "https://myresource.openai.azure.com/openai/v1",
+            "https://openrouter.ai/api/v1",
+            "https://api.studio.nebius.com/v1",
+        ],
+    )
+    def test_a_commercial_model_api_is_refused(self, url):
+        with pytest.raises(ValueError, match="commercial model API"):
+            ChatCompletionsClient(url, "m")
+
+    def test_a_lookalike_host_is_not_mistaken_for_one(self):
+        ChatCompletionsClient("https://notapi.openai.com.example.org/v1", "m")
 
 
 class TestWithTheJudge:

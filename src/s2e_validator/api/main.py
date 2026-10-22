@@ -125,12 +125,13 @@ def build_service(
     settings: ServiceSettings, environ: Mapping[str, str] | None = None
 ) -> tuple[ValidatorService, str]:
     """The service and the name of the network it settles on."""
-    chain, signer, network, batch_size = _chain(settings, os.environ if environ is None else environ)
+    env = os.environ if environ is None else environ
+    chain, signer, network, batch_size = _chain(settings, env)
     batch_log = SqliteBatchLog(settings.batch_log)
     service = ValidatorService(
         # Stage 1 state is in memory for now; the durable stores are #50.
         pipeline=build_pipeline(load_config(settings.pipeline_config), FilterDependencies()),
-        judge=_judge(environ if environ is not None else os.environ),
+        judge=_judge(env),
         # One attempt per call: when a send gets no answer, the request ends
         # as "batched" after the client's confirmation wait (about a minute),
         # and the retry loop resolves it in the background. Otherwise a call
