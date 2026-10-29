@@ -15,6 +15,7 @@ from .contract import (
 from .judge import ImageLoader, Judge, ModelClient, ModelJudge, StubJudge
 from .prompt import ImagePart, Prompt, TextPart, build_prompt, prompt_version
 from .rubric import RATING_MAX, RATING_MIN, RUBRIC_V1, Criterion, Rubric
+from .unanimous import REASON_JUDGES_DISAGREE, UnanimousJudge
 
 # Sorted, so adding a name is a one-line diff wherever it belongs.
 __all__ = [
@@ -36,10 +37,12 @@ __all__ = [
     "Provenance",
     "RATING_MAX",
     "RATING_MIN",
+    "REASON_JUDGES_DISAGREE",
     "RUBRIC_V1",
     "Rubric",
     "StubJudge",
     "TextPart",
+    "UnanimousJudge",
     "build_prompt",
     "parse_reply",
     "prompt_version",
