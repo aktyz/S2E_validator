@@ -48,7 +48,7 @@ Reward batch → programs/survey2earn (execute_reward_batch)
 
 Before a model decides anyone's payment, it is measured against labels a person checked. The set: 73 of our own photos, each with a good description, a generic one ("A nice photo I took today..."), another photo's description, and on some photos an attempt to talk the grader into a high score. 268 cases; each fix was measured on new cases written before it (the "new" rows).
 
-Models: [NVIDIA Nemotron Nano 12B v2 VL](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16) and [Qwen2.5-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct), both open weights, served side by side with vLLM on one NVIDIA L40S on [Nebius AI Cloud](https://nebius.com). No contributor photo goes to a commercial AI API: the client refuses their hosts.
+Models: [NVIDIA Nemotron Nano 12B v2 VL](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8) (NVIDIA's FP8 build) and [Qwen2.5-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct), both open weights, served side by side with vLLM on one NVIDIA L40S on [Nebius AI Cloud](https://nebius.com). No contributor photo goes to a commercial AI API: the client refuses their hosts.
 
 ### Two judges: pay only when both agree
 
@@ -57,12 +57,15 @@ The same 268 cases, the same prompt, the same pay line:
 | Judge | Agreement | Good paid | Generic not paid (old + new) | Mismatched not paid | Injections stopped |
 |---|---|---|---|---|---|
 | Qwen2.5-VL-7B alone | 259/268 (96.6%) | 68/73 | 93/97 | 73/73 | 25/25 |
-| NVIDIA Nemotron Nano 12B v2 VL alone | 193/268 (72.0%) | **73/73** | 31/97 | 71/73 | 18/25 |
-| **Both, paid only if both would pay** (`judge/unanimous.py`) | **260/268 (97.0%)** | 68/73 | **94/97** | 73/73 | 25/25 |
+| NVIDIA Nemotron Nano 12B v2 VL alone (BF16) | 193/268 (72.0%) | **73/73** | 31/97 | 71/73 | 18/25 |
+| Both, two saved runs combined (`--combine`) | 260/268 (97.0%) | 68/73 | 94/97 | 73/73 | 25/25 |
+| **Both, live on one L40S** (Nemotron in FP8; `judge/unanimous.py`) | **259/268 (96.6%)** | 68/73 | 93/97 | 73/73 | 25/25 |
+
+The live row is the configuration the service runs: both models served at once by `deploy/judge-gpu.sh` (42 of 46 GB of GPU memory), every case asked of both. They disagreed on 72 cases, and none of those was paid.
 
 The two models fail differently. Nemotron never refused a good description and rejected 71 of 73 mismatched ones, but with our prompt it pays most generic text, often at full marks: it is the lenient judge. Qwen is the strict one. Requiring both is the most accurate of the three, and a second model with a veto can only stop a payment, never cause one. Every veto is marked `JUDGES_DISAGREE` in the verdict, and provenance names both models.
 
-Honest limits: on this set Nemotron's veto changes 1 case of 268, so most of the accuracy is Qwen's. Nemotron ran with its reasoning off (the reply is forced to be JSON), and our prompt and pay line were tuned on Qwen before Nemotron joined; both are the next things to measure. Nemotron alone would not be safe to pay with.
+Honest limits: on this set Nemotron's veto changes at most 1 case of 268, and live the pair scored the same as Qwen alone, so the accuracy is Qwen's. What Nemotron adds today is a second, independent check on every payment, from a model trained differently. Nemotron ran with its reasoning off (the reply is forced to be JSON), and our prompt and pay line were tuned on Qwen before Nemotron joined; both are the next things to measure. Nemotron alone would not be safe to pay with.
 
 ### How the judge got here (Qwen2.5-VL-7B)
 

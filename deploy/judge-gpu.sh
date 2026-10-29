@@ -12,9 +12,12 @@ set -euo pipefail
 # submission is paid only if both would pay it (judge/unanimous.py):
 #   S2E_JUDGE_URL=http://localhost:8001/v1         S2E_JUDGE_MODEL=judge
 #   S2E_JUDGE_SECOND_URL=http://localhost:8002/v1  S2E_JUDGE_SECOND_MODEL=judge
-# The memory shares are what fits both: weights about 16 GB and 24 GB.
+# The memory shares are what fits both: Qwen in BF16 (about 16.6 GB of
+# weights) and Nemotron in NVIDIA's FP8 build (15.4 GB; the BF16 build, about
+# 25 GB, leaves no room for the working memory of either). The L40S runs FP8
+# natively.
 QWEN="${QWEN:-Qwen/Qwen2.5-VL-7B-Instruct}"
-NEMOTRON="${NEMOTRON:-nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16}"
+NEMOTRON="${NEMOTRON:-nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8}"
 # The image the measurements in README.md ran on (vLLM 0.32.0), pinned by digest.
 VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34}"
 
@@ -70,10 +73,13 @@ ready() {  # name port
 }
 
 sudo docker rm -f judge 2>/dev/null || true  # the single-model container of earlier runs
-echo "loading both models (the first run downloads about 40 GB)..."
+echo "loading both models (the first run downloads about 32 GB)..."
 # One after the other: each checks the GPU memory that is free when it starts.
-serve judge-qwen 8001 "$QWEN" 0.40
+serve judge-qwen 8001 "$QWEN" 0.47 --max-num-seqs 8
 ready judge-qwen 8001 || exit 1
-serve judge-nemotron 8002 "$NEMOTRON" 0.55 --trust-remote-code
+# Nemotron is a hybrid (Mamba) model: its state is reserved per concurrent
+# request, and CUDA graphs need memory on top. The judge sends one request at
+# a time, so few requests and no graphs fit it next to Qwen.
+serve judge-nemotron 8002 "$NEMOTRON" 0.47 --trust-remote-code --quantization modelopt --max-num-seqs 8 --enforce-eager
 ready judge-nemotron 8002 || exit 1
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv
