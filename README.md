@@ -94,6 +94,7 @@ What the first run found, and the fixes:
 - **Nebius AI Cloud:** one NVIDIA L40S virtual machine (preemptible) serves both models with vLLM, bound to 127.0.0.1, and every measurement ran on that machine, next to the models.
 - **NVIDIA Nemotron Nano 12B v2 VL:** the second judge, with a veto on every payment.
 - **NVIDIA hardware and software:** the L40S GPU, CUDA, and the NVIDIA container toolkit under vLLM.
+- **Nebius Token Factory: not used, on purpose.** A hosted inference API would receive contributors' photos, which this project rules out (D5); the client refuses Nebius's hosted API hosts like any other commercial API. Serving the open models ourselves on AI Cloud keeps the photos on a machine we control.
 
 Reproduce:
 
