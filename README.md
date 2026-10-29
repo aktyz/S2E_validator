@@ -1,5 +1,7 @@
 # Survey2Earn Validator
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 Off-chain service that decides whether a contributor submission is rewardable and produces the quality score (`Q_i`) that `execute_reward_batch` settles on-chain.
 
 [Survey2Earn](https://survey2earn.xyz) pays people for validated human–AI training data: a data buyer funds a capped treasury, this validator checks each contribution, and a Solana program pays the accepted ones by rules fixed before the run starts. The demo's first contribution type is a photo with a description; it runs on Solana devnet with test tokens of no monetary value.
