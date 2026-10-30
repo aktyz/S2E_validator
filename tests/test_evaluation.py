@@ -10,6 +10,7 @@ from s2e_validator.judge import RUBRIC_V1, StubJudge
 from s2e_validator.judge.evaluation import (
     Label,
     LabelError,
+    RunMismatch,
     combine,
     held_out_pay_line,
     judged_row,
@@ -103,6 +104,26 @@ class TestPayLine:
 
         assert line["line"] == 18
         assert (line["chosen_on"], line["held_out"]) == ("2/2", "2/2")
+
+    def test_a_combined_run_applies_the_line_to_the_lower_score(self):
+        """F-02 of #11: the first judge's score alone would ignore the veto."""
+        first = [
+            row(case="1", photo="a.jpg", kind="generic", score=56, expect=False),
+            row(case="2", photo="b.jpg", kind="generic", score=56, expect=False),
+        ]
+        second = [
+            row(case="1", photo="a.jpg", kind="generic", score=11, rewardable=False, expect=False),
+            row(case="2", photo="b.jpg", kind="generic", score=11, rewardable=False, expect=False),
+        ]
+
+        line = held_out_pay_line(combine(first, second))
+
+        assert line["line"] == 12
+        assert line["held_out"] == "1/1"
+        assert line["scored_on"] == "both judges"
+
+    def test_a_live_run_says_its_line_is_the_first_judge_alone(self):
+        assert held_out_pay_line([row(photo="a.jpg")])["scored_on"] == "first judge only"
 
     def test_a_blocking_reason_is_never_paid_whatever_the_line(self):
         rows = [row(photo="a.jpg", kind="mismatch", score=90, reasons=["DESCRIPTION_MISMATCH"],
@@ -201,5 +222,31 @@ class TestCombining:
         assert combined[0]["status"] == "HELD" and combined[0]["rewardable"] is None
 
     def test_different_cases_are_refused(self):
-        with pytest.raises(LabelError, match="same cases"):
+        with pytest.raises(RunMismatch, match="same cases"):
             combine([row(case="a")], [row(case="b")])
+
+    @pytest.mark.parametrize("flip", [False, True])
+    def test_a_case_rejected_in_only_one_run_is_refused_in_either_order(self, flip):
+        """F-01 of #10: otherwise the result depends on the argument order."""
+        scored = [row(case="a")]
+        rejected = [row(case="a", status="REJECTED", score=0, rewardable=False)]
+
+        with pytest.raises(RunMismatch, match="only one run"):
+            combine(*((rejected, scored) if flip else (scored, rejected)))
+
+    def test_a_case_both_runs_rejected_stays_rejected(self):
+        rejected = [row(case="a", status="REJECTED", score=0, rewardable=False, reasons=["TEXT_ADDRESSES_GRADER"])]
+
+        assert combine(rejected, rejected)[0]["status"] == "REJECTED"
+
+    def test_a_disagreement_is_marked_and_the_second_score_kept(self):
+        combined = combine([row(case="a", score=56)], [row(case="a", score=11, rewardable=False)])[0]
+
+        assert combined["reasons"] == ["JUDGES_DISAGREE"]
+        assert (combined["score"], combined["second_score"]) == (56, 11)
+
+    def test_provenance_names_both_runs(self):
+        first = dict(row(case="a"), judge={"model": "qwen", "rubric_version": "v1"})
+        second = dict(row(case="a"), judge={"model": "nemotron", "rubric_version": "v1"})
+
+        assert combine([first], [second])[0]["judge"] == {"model": "qwen + nemotron", "rubric_version": "v1"}

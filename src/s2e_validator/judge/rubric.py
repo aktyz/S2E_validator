@@ -182,8 +182,10 @@ class Rubric:
 #: our own photos). Scores came in a few values only: generic and mismatched
 #: descriptions never above 17, a good one most often 36 (ratings 3, 2, 2). At
 #: 40 the judge paid 30 of 73 good descriptions; at 30 it pays 67 and still no
-#: generic or mismatched one. Provisional: short descriptions written by us,
-#: to be checked again on real submissions.
+#: generic or mismatched one. 30 was set by hand, for the margin between the
+#: highest bad score (17) and the typical good one (36); the held-out rule in
+#: judge/evaluation.py alone would pick 12. Provisional: short descriptions
+#: written by us, to be checked again on real submissions.
 RUBRIC_V1 = Rubric(
     version="rubric-v1.1",
     campaign_brief=(

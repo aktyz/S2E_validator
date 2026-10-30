@@ -41,6 +41,7 @@ from s2e_validator.judge.chat_client import ChatCompletionsClient
 from s2e_validator.judge.evaluation import (
     Label,
     LabelError,
+    RunMismatch,
     combine,
     judged_row,
     load_labels,
@@ -128,12 +129,15 @@ def saved_results(path: str) -> list[dict]:
 
 
 def main() -> int:
-    if len(sys.argv) == 4 and sys.argv[1] == "--combine":
-        print(json.dumps(summarise(combine(saved_results(sys.argv[2]), saved_results(sys.argv[3]))), indent=2))
-        return 0
-    if len(sys.argv) == 3 and sys.argv[1] == "--summarise":
-        print(json.dumps(summarise(saved_results(sys.argv[2])), indent=2))
-        return 0
+    try:
+        if len(sys.argv) == 4 and sys.argv[1] == "--combine":
+            print(json.dumps(summarise(combine(saved_results(sys.argv[2]), saved_results(sys.argv[3]))), indent=2))
+            return 0
+        if len(sys.argv) == 3 and sys.argv[1] == "--summarise":
+            print(json.dumps(summarise(saved_results(sys.argv[2])), indent=2))
+            return 0
+    except (LabelError, RunMismatch) as exc:
+        raise SystemExit(str(exc)) from None
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("labels", type=Path)
     parser.add_argument("photos", type=Path)
@@ -146,6 +150,8 @@ def main() -> int:
         labels = load_labels(args.labels, args.photos)
     except LabelError as exc:
         raise SystemExit(f"labels: {exc}") from None
+    if args.out is not None and not args.out.resolve().parent.is_dir():
+        raise SystemExit(f"--out: {args.out.resolve().parent} is not a folder")
     judge = build_judge(args.judge)
     check = text_filter(args.campaign)
 

@@ -32,12 +32,12 @@ Do not post anything to GitHub and do not touch the PR_10_REVIEW.md file.
 
 | PR | Open | Persists | Fixed | Dropped | Unclear |
 |----|------|----------|-------|---------|---------|
-| #4 | 0 | 7 | 4 | 0 | 0 |
+| #4 | 0 | 6 | 5 | 0 | 0 |
 | #5 | 0 | 7 | 0 | 0 | 0 |
 | #7 | 0 | 5 | 0 | 0 | 1 |
-| #10 | 8 | 0 | 0 | 0 | 0 |
-| #11 | 0 | 13 | 2 | 0 | 0 |
-| #12 | 0 | 13 | 0 | 0 | 1 |
+| #10 | 3 | 0 | 5 | 0 | 0 |
+| #11 | 0 | 9 | 6 | 0 | 0 |
+| #12 | 0 | 3 | 11 | 0 | 0 |
 
 Status values: `open` (reported, not yet re-checked), `persists`, `fixed`, `dropped` (the author declined it and the reviewer agreed), `unclear`. Each status change gets a date.
 
@@ -112,12 +112,13 @@ Source: `docs/reviews/PR_4_REVIEW.md`, round 1, reviewed `ba518c5` on 2026-10-30
   - Re-check (2026-10-30, after PR #12): `git log -p --follow` shows the file was created in `e64566a` (#92) with `"allowed_formats": ["JPEG", "PNG", "WEBP"]` on one line, and `ba518c5` (PR #4) reflowed it to one value per line. The reflow is still in the file.
   - Re-check (2026-10-30, after PR #10): unchanged; still one value per line.
 
-- **F-10** · 🔵 Question · `calibration/measure_judge.py` · **persists** (2026-10-30)
+- **F-10** · 🔵 Question · `calibration/measure_judge.py` · **fixed** (2026-10-30)
   - Anchor: `best = min(100, max(wrongly_paid, default=-1) + 1)`
   - Fix: the held-out rule outputs about 18, not 30. Explain how 30 was chosen, and which line "101/108" refers to. If 30 is a deliberate margin, say so in the rubric comment.
   - Evidence (2026-10-30): anchor unchanged. The `RUBRIC_V1` comment in `src/s2e_validator/judge/rubric.py` still explains 30 only by the full-set counts ("at 30 it pays 67") and doesn't mention the held-out line or a deliberate margin.
   - Re-check (2026-10-30, after PR #12): anchor and the `RUBRIC_V1` comment both unchanged.
   - Re-check (2026-10-30, after PR #10): the anchor line moved, unchanged, into `held_out_pay_line` in `src/s2e_validator/judge/evaluation.py`. The `RUBRIC_V1` comment still mentions neither the held-out line nor a margin.
+  - Fixed (2026-10-30, fix/address-reviews): the rubric comment and the README now say 30 was set by hand for the margin, that the held-out rule picks 12, and which line each figure belongs to (101/108 at 12, 105/108 at 30, 87/108 at 40).
 
 - **F-11** · 🔵 Question · `src/s2e_validator/prefilters/text_format.py` · **fixed** (2026-10-30)
   - Anchor: `if pattern.search(normalized):`
@@ -232,37 +233,42 @@ Source: `docs/reviews/PR_7_REVIEW.md`, round 1, reviewed `e19eee9` on 2026-10-30
 
 Source: `docs/reviews/PR_10_REVIEW.md`, round 1, reviewed `e86697c` on 2026-10-30.
 
-- **F-01** · 🔴 Bug · `src/s2e_validator/judge/evaluation.py` · **open** (2026-10-30)
+- **F-01** · 🔴 Bug · `src/s2e_validator/judge/evaluation.py` · **fixed** (2026-10-30)
   - Anchor: `elif mine["status"] == "SCORED" and other["status"] == "SCORED":`
   - Fix: `combine()` pays a case the second run rejected at Stage 1 (SCORED and rewardable in `mine`, REJECTED in `other`), so the result depends on argument order. Refuse runs where exactly one side is REJECTED (made with different `--campaign` settings), and add a test.
+  - Fixed (2026-10-30, fix/address-reviews): `combine()` raises `RunMismatch` when exactly one side is REJECTED; `test_a_case_rejected_in_only_one_run_is_refused_in_either_order`. Saved runs still give 260/268.
 
 - **F-02** · 🟠 Design · `calibration/measure_judge.py` · **open** (2026-10-30)
   - Anchor: `def build_judge(kind: str) -> Judge:`
   - Fix: `build_judge` is a copy of `_judge` in `api/main.py` (and `DEFAULT_TIMEOUT` duplicates the service's `"60"`), so the two can drift again. Move a `model_judge_from_env(env) -> Judge` that raises `ValueError` into the judge package (`api.main` imports `fastapi`, so the script can't import it), and have both callers wrap the error.
 
-- **F-03** · 🟠 Design · `calibration/measure_judge.py` · **open** (2026-10-30)
+- **F-03** · 🟠 Design · `calibration/measure_judge.py` · **fixed** (2026-10-30)
   - Anchor: `summary = write(args.out, results)`
   - Fix: `--out` isn't checked, so a missing directory raises inside the `finally` after every model call is paid for, and nothing is saved or printed. Check `args.out.parent.is_dir()` next to `load_labels`, before `build_judge`.
+  - Fixed (2026-10-30, fix/address-reviews): `--out`'s folder is checked next to `load_labels`, before `build_judge`.
 
 - **F-04** · 🟡 Style · `calibration/measure_judge.py` · **open** (2026-10-30)
   - Anchor: `def write(out: Path | None, results: list[dict]) -> dict:`
   - Fix: a stopped run's file looks like a finished one. Pass the label count and record `"complete"` and `"labels"` at the top level.
 
-- **F-05** · 🟡 Style · `src/s2e_validator/judge/evaluation.py` · **open** (2026-10-30)
+- **F-05** · 🟡 Style · `src/s2e_validator/judge/evaluation.py` · **fixed** (2026-10-30)
   - Anchor: `row = dict(mine)`
   - Fix: combined rows keep the first run's `judge`, so the `--combine` summary names only the first model. Join provenance like `_combined` in `unanimous.py`, and add `REASON_JUDGES_DISAGREE` when the votes differ.
+  - Fixed (2026-10-30, fix/address-reviews): `_combined_judge` joins provenance, and `combine()` adds `JUDGES_DISAGREE` when the votes differ; both tested.
 
-- **F-06** · 🟡 Style · `calibration/measure_judge.py` · **open** (2026-10-30)
+- **F-06** · 🟡 Style · `calibration/measure_judge.py` · **fixed** (2026-10-30)
   - Anchor: `print(json.dumps(summarise(combine(saved_results(sys.argv[2]), saved_results(sys.argv[3]))), indent=2))`
   - Fix: `LabelError` from `combine` or `_reasons` is uncaught in the `--combine` / `--summarise` branches, which prints a traceback where there used to be a sentence. Catch it and exit with `SystemExit`, and consider a separate `RunMismatch` error for `combine`.
+  - Fixed (2026-10-30, fix/address-reviews): the `--combine` and `--summarise` branches catch `LabelError` and the new `RunMismatch` and exit with a sentence.
 
 - **F-07** · 🟡 Style · `src/s2e_validator/judge/evaluation.py` · **open** (2026-10-30)
   - Anchor: `def load_labels(path: Path, photos: Path) -> list[Label]:`
   - Fix: `load_labels` stops at the first problem. Collect every problem and raise a single `LabelError` with all of them.
 
-- **F-08** · 🔵 Question · `deploy/judge-gpu.sh` · **open** (2026-10-30)
+- **F-08** · 🔵 Question · `deploy/judge-gpu.sh` · **fixed** (2026-10-30)
   - Anchor: `--served-model-name judge \` (removed line)
   - Fix: ask whether any service, `.env`, unit or note still sets `S2E_JUDGE_MODEL=judge`. After a redeploy, every call would be held instead of failing at startup. Update those settings, and consider a `GET /v1/models` check against `S2E_JUDGE_MODEL` at service start.
+  - Fixed (2026-10-30, fix/address-reviews): nothing sets `S2E_JUDGE_MODEL=judge`: the deployed service runs the stub, and the only model setting is the README's reproduce step, already updated. The start-up `GET /v1/models` check is not added.
 
 ---
 
@@ -278,11 +284,12 @@ This change reached `main` through PR #11, so PR #11 is the only reference for i
   - Evidence (2026-10-30): anchor unchanged in `build_judge()`; there is still no both-or-neither check, and `os.environ["S2E_JUDGE_SECOND_MODEL"]` is still indexed directly.
   - Re-check (2026-10-30, after PR #10): fixed. The anchor is gone. `build_judge()` now refuses one of `S2E_JUDGE_SECOND_URL` / `_SECOND_MODEL` without the other ("go together"), and reads the second pair only when both are set. This doesn't go through a shared builder (see F-03 and PR #10 F-02).
 
-- **F-02** · 🔴 Bug · `calibration/measure_judge.py` · **persists** (2026-10-30)
+- **F-02** · 🔴 Bug · `calibration/measure_judge.py` · **fixed** (2026-10-30)
   - Anchor: `row["rewardable"] = bool(mine["rewardable"] and other["rewardable"])`
   - Fix: `held_out_pay_line()` recomputes payment from the first run's score and ignores the veto. Keep the second score (`row["second_score"]`) and apply the line to `min` of both; for live two-model runs record each judge's score or label the block "primary only".
   - Evidence (2026-10-30): anchor unchanged; `combine()` keeps only the first run's `score` (no `second_score`), and `held_out_pay_line()` still pays on `r["score"] >= line`.
   - Re-check (2026-10-30, after PR #10): the anchor line moved, unchanged, into `combine()` in `src/s2e_validator/judge/evaluation.py`. There is still no `second_score`, and `held_out_pay_line()` still pays on `row["score"] >= line`.
+  - Fixed (2026-10-30, fix/address-reviews): `combine()` keeps `second_score`, and `held_out_pay_line()` applies the line to the lower score, tested. Live two-model runs record only the primary score, so the summary says `scored_on: first judge only`. Re-summarised: combined 260/268 unchanged, held-out 107/108 at 12 and 105/108 at 30.
 
 - **F-03** · 🟠 Design · `calibration/measure_judge.py` · **persists** (2026-10-30)
   - Anchor: `def build_judge(kind: str):`
@@ -308,17 +315,19 @@ This change reached `main` through PR #11, so PR #11 is the only reference for i
   - Evidence (2026-10-30): anchor unchanged inside the comprehension over both endpoints; there is no `S2E_JUDGE_SECOND_API_KEY`.
   - Re-check (2026-10-30, after PR #10): unchanged. There is still one key for both endpoints, and the module docstring still says the second model "shares the key".
 
-- **F-07** · 🟡 Style · `calibration/measure_judge.py` · **persists** (2026-10-30)
+- **F-07** · 🟡 Style · `calibration/measure_judge.py` · **fixed** (2026-10-30)
   - Anchor: `elif mine["status"] == "SCORED" and other["status"] == "SCORED":`
   - Fix: `combine()` isn't "the same rule as UnanimousJudge": add `JUDGES_DISAGREE` when `rewardable` differs, and refuse runs where exactly one row is REJECTED (different text checks).
   - Evidence (2026-10-30): anchor unchanged; `combine()` still adds no `JUDGES_DISAGREE` and doesn't check for a REJECTED row on one side only.
   - Re-check (2026-10-30, after PR #10): the anchor line moved, unchanged, into `combine()` in `src/s2e_validator/judge/evaluation.py`. There is still no `JUDGES_DISAGREE` and no check for a REJECTED row on one side only. PR #10 F-01 and F-05 raise this again.
+  - Fixed (2026-10-30, fix/address-reviews): `combine()` adds `JUDGES_DISAGREE` and refuses a one-sided REJECTED (see PR #10 F-01, F-05).
 
-- **F-08** · 🟡 Style · `src/s2e_validator/judge/unanimous.py` · **persists** (2026-10-30)
+- **F-08** · 🟡 Style · `src/s2e_validator/judge/unanimous.py` · **fixed** (2026-10-30)
   - Anchor: `only stop payments, so it cannot make a wrong payout more likely.`
   - Fix: move the measured figures to the README and state the trade-off (a veto can withhold correct payouts, and either judge being down holds the submission).
   - Evidence (2026-10-30): the module docstring still has the 259/193/260 figures and this sentence. PR #12 adds the figures to the README, but the docstring wasn't trimmed and still doesn't state the trade-off.
   - Re-check (2026-10-30, after PR #10): unchanged; the docstring still has the figures and doesn't state the trade-off.
+  - Fixed (2026-10-30, fix/address-reviews): the docstring drops the figures, points at the README and states the trade-off.
 
 - **F-09** · 🟡 Style · `calibration/measure_judge.py` · **fixed** (2026-10-30)
   - Anchor: `combines two saved runs on the same labels the same way, without a model. The labels and photos stay outside this repository:`
@@ -344,11 +353,12 @@ This change reached `main` through PR #11, so PR #11 is the only reference for i
   - Evidence (2026-10-30): `TestTheVerdict` still has only the score/ratings, reasons and provenance tests. None of the four suggested tests exists anywhere in the file.
   - Re-check (2026-10-30, after PR #10): `TestTheVerdict` still has the same three tests, and the first three suggested tests are still missing. `combine()` now has tests, in `TestCombining` in `tests/test_evaluation.py`: three cases, not a table test.
 
-- **F-13** · 🔵 Question · `src/s2e_validator/judge/unanimous.py` · **persists** (2026-10-30)
+- **F-13** · 🔵 Question · `src/s2e_validator/judge/unanimous.py` · **fixed** (2026-10-30)
   - Anchor: `together, paying only when both would, on 260. A second model with a veto can`
   - Fix: live the pair scored 259/268, the same as Qwen alone, at double GPU/latency and more holds. Ask what justifies enabling it, and document in the README when an operator should set the second model.
   - Evidence (2026-10-30): anchor unchanged. PR #12's README gives a rationale ("a second, independent check"), but `README.md` wasn't in this re-check, and the docstring still says nothing on when to set the second model.
   - Re-check (2026-10-30, after PR #10): anchor unchanged. `README.md` ("Honest limits") says the live pair scored the same as Qwen alone, and that what Nemotron adds is "a second, independent check on every payment". It still doesn't say when an operator should set the second model.
+  - Fixed (2026-10-30, fix/address-reviews): README "When to set the second model" gives the cost and when an operator should set it, and says it does not raise agreement.
 
 - **F-14** · 🔵 Question · `src/s2e_validator/judge/unanimous.py` · **persists** (2026-10-30)
   - Anchor: `is_rewardable=all(votes),`
@@ -368,70 +378,81 @@ This change reached `main` through PR #11, so PR #11 is the only reference for i
 
 Source: `docs/reviews/PR_12_REVIEW.md`, round 1, reviewed `8327445` on 2026-10-30.
 
-- **F-01** · 🟠 Design · `README.md` · **persists** (2026-10-30)
+- **F-01** · 🟠 Design · `README.md` · **fixed** (2026-10-30)
   - Anchor: `Stage 2: judge                       ← two open vision models we serve ourselves, NVIDIA Nemotron and Qwen; paid only if both agree (below)`
   - Fix: the diagram (and "the configuration the service runs") presents the two-model judge as live, but the public demo runs the stub. Say what is measured and what is live, and add a short note near the top on what runs on Nebius AI Cloud (bears on the hackathon "runs on" rule).
   - Evidence (2026-10-30, after PR #10): the anchor is unchanged, and the live-row sentence still says "the configuration the service runs". The README does say "The live demo at survey2earn.xyz still runs the stub", but only below the reproduce steps. There is still no note near the top on what runs on Nebius AI Cloud.
+  - Fixed (2026-10-30, fix/address-reviews): a "What runs where" table near the top says what is measured on Nebius and what the public site runs; the diagram and the live-row sentence no longer read as live on the site.
 
-- **F-02** · 🟠 Design · `README.md` · **persists** (2026-10-30)
+- **F-02** · 🟠 Design · `README.md` · **fixed** (2026-10-30)
   - Anchor: `- **Still open:** the judge misses 5 very short good descriptions ("Grey office chair on a dark carpet"), which it calls generic, and some quality claims. With a 7B model, instructions alone seem to have reached their limit here, which is why a second, larger model now has a veto (above).`
   - Fix: a veto only stops payments, so it can't recover the 5 missed good descriptions (Good paid stays 68/73). Reword: the veto can catch paid quality claims, not false negatives.
   - Evidence (2026-10-30, after PR #10): anchor unchanged.
+  - Fixed (2026-10-30, fix/address-reviews): reworded: a veto cannot recover the 5 refused good descriptions, and could only catch paid quality claims.
 
 - **F-03** · 🟠 Design · `deploy/judge-gpu.sh` · **persists** (2026-10-30)
   - Anchor: `curl -fsSL https://get.docker.com | sudo sh`
   - Fix: unpinned remote script piped to root on the machine that holds contributors' photos. Install `docker.io` from the Ubuntu archive, or use Docker's apt repo with a signed key, like the NVIDIA repo.
   - Evidence (2026-10-30, after PR #10): anchor unchanged.
 
-- **F-04** · 🟡 Style · `deploy/judge-gpu.sh` · **persists** (2026-10-30)
+- **F-04** · 🟡 Style · `deploy/judge-gpu.sh` · **fixed** (2026-10-30)
   - Anchor: `# Then, from the laptop:  ssh -N -L 8001:127.0.0.1:8001 -L 8002:127.0.0.1:8002 emmanuel@<ip>`
   - Fix: replace the personal login name with `<user>@<ip>`.
   - Evidence (2026-10-30, after PR #10): anchor unchanged; still `emmanuel@<ip>`.
+  - Fixed (2026-10-30, fix/address-reviews): now `<user>@<ip>`.
 
-- **F-05** · 🟡 Style · `README.md` · **persists** (2026-10-30)
+- **F-05** · 🟡 Style · `README.md` · **fixed** (2026-10-30)
   - Anchor: ``| `deploy/judge-gpu.sh` | Serves the judge model with vLLM on a GPU machine, on 127.0.0.1 only |``
   - Fix: stale singular; the script serves both models. "Serves both judge models (Qwen and Nemotron) with vLLM on one GPU, on 127.0.0.1 only".
   - Evidence (2026-10-30, after PR #10): anchor unchanged.
+  - Fixed (2026-10-30, fix/address-reviews): row now says both judge models.
 
-- **F-06** · 🟡 Style · `README.md` · **persists** (2026-10-30)
+- **F-06** · 🟡 Style · `README.md` · **fixed** (2026-10-30)
   - Anchor: ``| `src/s2e_validator/judge/chat_client.py` | `ChatCompletionsClient`: the judge's client for a self-hosted, OpenAI-compatible server |``
   - Fix: add a file-table row for `src/s2e_validator/judge/unanimous.py` (`UnanimousJudge`, vetoes marked `JUDGES_DISAGREE`).
   - Evidence (2026-10-30, after PR #10): the Layout table still has no row for `judge/unanimous.py`.
+  - Fixed (2026-10-30, fix/address-reviews): rows added for `judge/unanimous.py` and `judge/evaluation.py`.
 
-- **F-07** · 🟡 Style · `README.md` · **persists** (2026-10-30)
+- **F-07** · 🟡 Style · `README.md` · **fixed** (2026-10-30)
   - Anchor: ``The live row is the configuration the service runs: both models served at once by `deploy/judge-gpu.sh` (42 of 46 GB of GPU memory), every case asked of both. They disagreed on 72 cases, and none of those was paid.``
   - Fix: "46 GB" here vs "48 GB L40S" in the script for the same card. Use one figure or say "(42 of the 46 GB `nvidia-smi` reports)".
   - Evidence (2026-10-30, after PR #10): unchanged. The README still says "42 of 46 GB", and the script still says "48 GB L40S".
+  - Fixed (2026-10-30, fix/address-reviews): README now says "42 of the 46 GB `nvidia-smi` reports on the 48 GB card".
 
-- **F-08** · 🟡 Style · `README.md` · **persists** (2026-10-30)
+- **F-08** · 🟡 Style · `README.md` · **fixed** (2026-10-30)
   - Anchor: ``| Empty or whitespace-only | `TEXT_EMPTY` | |``
   - Fix: the em-dash purge left empty Default and status-ID cells that read as missing data. Use `none` / `n/a`.
   - Evidence (2026-10-30, after PR #10): anchor unchanged. The Default cells for `TEXT_ENCODING_INVALID` and `IMAGE_UNDECODABLE` are empty too.
+  - Fixed (2026-10-30, fix/address-reviews): empty cells now read `none` / `n/a`.
 
-- **F-09** · 🟡 Style · `README.md` · **unclear** (2026-10-30)
+- **F-09** · 🟡 Style · `README.md` · **fixed** (2026-10-30)
   - Anchor: `[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)`
   - Fix: no copyright statement anywhere. Add a `## License` section (`Copyright 2026 <owner>…`) or a `NOTICE` file; leave `LICENSE` unmodified.
   - Evidence (2026-10-30, after PR #10): the anchor (the licence badge) isn't in this checkout's `README.md`, and there is no `## License` section or copyright line either. But the checkout (`e86697c`) doesn't contain `01af453` / `8327445`, the commits that added the licence. At session start, HEAD's history went `e86697c` → `e6a130c` → `a63cf94`. So what's missing here says nothing about `main`. Whether a `NOTICE` file exists would need a folder check.
+  - Fixed (2026-10-30, fix/address-reviews): badge is on `main` (came in with PR #12) and GitHub detects Apache-2.0. Added a `## License` section with a copyright line for "the Survey2Earn authors"; `LICENSE` unmodified. Zyta to confirm the owner name.
 
 - **F-10** · 🟡 Style · PR description (not a file) · **persists** (2026-10-30)
   - Anchor: none (PR metadata)
   - Fix: the description says "all four runs" and "serves the model"; the title's `feat:` should be `docs:`. Check that `01af453` and `8327445` (same subject) aren't a duplicate licence merge.
   - Evidence (2026-10-30, after PR #10): `gh pr view 12` shows the description still says "all four runs" and "serves the model", and the title is still `feat: Updated README…`. On the commits: `8327445` has parents `a63cf94` and `01af453`, so it is the merge that brought `01af453` in under the same subject, not a second licence change.
 
-- **F-11** · 🔵 Question · `README.md` · **persists** (2026-10-30)
+- **F-11** · 🔵 Question · `README.md` · **fixed** (2026-10-30)
   - Anchor: ``This repository is the validator on its own. It was built from mid-September 2026 inside the Survey2Earn repository and moved here with its history; issue and pull request numbers written as `#13` refer to that repository, and the Solana program and the demo site live there.``
   - Fix: confirm the hackathon allows work started before its period; if it asks for new work, say which parts were built during it.
   - Evidence (2026-10-30, after PR #10): anchor unchanged; the README still doesn't say which parts were built during the hackathon.
+  - Fixed (2026-10-30, fix/address-reviews): the README says what was built when, from the first commit (14 Sep) and PRs #1 onward (19 to 30 Oct). The rules allow existing projects that were significantly updated in the period, with a written note; the note is in the submission doc.
 
-- **F-12** · 🔵 Question · `README.md` · **persists** (2026-10-30)
+- **F-12** · 🔵 Question · `README.md` · **fixed** (2026-10-30)
   - Anchor: `- **NVIDIA Nemotron Nano 12B v2 VL:** the second judge, with a veto on every payment.`
   - Fix: judging weighs NVIDIA model use and the veto changes at most 1 case. Measure Nemotron with reasoning on or a re-tuned prompt if time allows; otherwise say what the veto is for, without softening the numbers.
   - Evidence (2026-10-30, after PR #10): the anchor is unchanged, and no Nemotron run with reasoning on or a re-tuned prompt is reported. The "Honest limits" paragraph does give the 1-in-268 figure and what the veto adds. Whether that answers the question is the author's call, so it stays open.
+  - Fixed (2026-10-30, fix/address-reviews): not measured: reasoning on was too slow for the deadline at single-request speed, and a re-tuned prompt would need a fresh labelled review. The README says plainly that the veto is a safeguard, not higher agreement, and when to set it.
 
-- **F-13** · 🔵 Question · `README.md` · **persists** (2026-10-30)
+- **F-13** · 🔵 Question · `README.md` · **fixed** (2026-10-30)
   - Anchor: `- **Nebius Token Factory: not used, on purpose.** A hosted inference API would receive contributors' photos, which this project rules out (D5); the client refuses Nebius's hosted API hosts like any other commercial API. Serving the open models ourselves on AI Cloud keeps the photos on a machine we control.`
   - Fix: the rules ask for feedback on Token Factory, AI Cloud and NVIDIA tools. Decide README vs Devpost form; the script comments (FP8 fit, `--enforce-eager` for Mamba) are ready material.
   - Evidence (2026-10-30, after PR #10): the anchor is unchanged, and the README has no feedback section on Token Factory, AI Cloud or the NVIDIA tools.
+  - Fixed (2026-10-30, fix/address-reviews): `docs/feedback.md` covers AI Cloud, Token Factory, Nemotron and the L40S, linked from the README, ready to paste into the Devpost form.
 
 - **F-14** · 🔵 Question · `deploy/judge-gpu.sh` · **persists** (2026-10-30)
   - Anchor: `sudo docker run -d --name "$name" --restart unless-stopped --gpus all \`

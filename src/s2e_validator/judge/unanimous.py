@@ -1,10 +1,10 @@
 """Several judges, and a submission is paid only if every one of them would pay it.
 
-Measured on our labelled set (README, "The judge, measured"): Qwen2.5-VL-7B
-alone agreed on 259 of 268 cases, NVIDIA Nemotron Nano 12B v2 VL alone on 193
-(it pays good descriptions every time, but most generic ones too), and the two
-together, paying only when both would, on 260. A second model with a veto can
-only stop payments, so it cannot make a wrong payout more likely.
+The measured numbers are in the README ("Two judges: pay only when both
+agree"). The trade-off: a veto can only stop payments, so a second model cannot
+make a wrong payout more likely, but it can withhold a correct one, it costs a
+second model's time on every submission, and either judge being down holds the
+submission.
 """
 
 from __future__ import annotations

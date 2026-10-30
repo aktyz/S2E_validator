@@ -4,7 +4,7 @@
 #
 #   bash deploy/judge-gpu.sh
 #
-# Then, from the laptop:  ssh -N -L 8001:127.0.0.1:8001 -L 8002:127.0.0.1:8002 emmanuel@<ip>
+# Then, from the laptop:  ssh -N -L 8001:127.0.0.1:8001 -L 8002:127.0.0.1:8002 <user>@<ip>
 # and the judge URLs are  http://localhost:8001/v1 and http://localhost:8002/v1
 set -euo pipefail
 
