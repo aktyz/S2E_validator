@@ -7,7 +7,12 @@ With `--campaign`, that campaign's text check runs first, as in the service: a
 description it rejects never reaches the judge and is not paid.
 
 With `--judge model`, the same S2E_JUDGE_URL / S2E_JUDGE_MODEL / S2E_JUDGE_API_KEY
-settings as the service. The labels and photos stay outside this repository:
+settings as the service, and with S2E_JUDGE_SECOND_URL / _SECOND_MODEL both
+models, paying only what both would pay.
+
+    python calibration/measure_judge.py --combine FIRST.json SECOND.json
+
+combines two saved runs on the same labels the same way, without a model. The labels and photos stay outside this repository:
 the photos are contributors' own.
 
 Each label line: {"case", "photo", "kind", "description", "expect_rewardable",
@@ -31,7 +36,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from s2e_validator.judge import RUBRIC_V1, JudgeInput, JudgeStatus, ModelJudge, StubJudge
+from s2e_validator.judge import RUBRIC_V1, JudgeInput, JudgeStatus, ModelJudge, StubJudge, UnanimousJudge
 from s2e_validator.prefilters import TextFormatFilter, TextFormatSettings, Verdict, load_config
 from s2e_validator.judge.chat_client import ChatCompletionsClient
 from s2e_validator.prefilters.interaction import Interaction, NewImage
@@ -40,13 +45,45 @@ from s2e_validator.prefilters.interaction import Interaction, NewImage
 def build_judge(kind: str):
     if kind == "stub":
         return StubJudge(RUBRIC_V1)
-    client = ChatCompletionsClient(
-        os.environ["S2E_JUDGE_URL"],
-        os.environ["S2E_JUDGE_MODEL"],
-        api_key=os.environ.get("S2E_JUDGE_API_KEY") or None,
-        timeout=float(os.environ.get("S2E_JUDGE_TIMEOUT", "120")),
-    )
-    return ModelJudge(client, RUBRIC_V1)
+    endpoints = [(os.environ["S2E_JUDGE_URL"], os.environ["S2E_JUDGE_MODEL"])]
+    if os.environ.get("S2E_JUDGE_SECOND_URL"):
+        endpoints.append((os.environ["S2E_JUDGE_SECOND_URL"], os.environ["S2E_JUDGE_SECOND_MODEL"]))
+    judges = [
+        ModelJudge(
+            ChatCompletionsClient(
+                url,
+                model,
+                api_key=os.environ.get("S2E_JUDGE_API_KEY") or None,
+                timeout=float(os.environ.get("S2E_JUDGE_TIMEOUT", "120")),
+            ),
+            RUBRIC_V1,
+        )
+        for url, model in endpoints
+    ]
+    return judges[0] if len(judges) == 1 else UnanimousJudge(judges)
+
+
+def combine(first: list[dict], second: list[dict]) -> list[dict]:
+    """Two saved runs on the same labels, paid only where both paid.
+
+    The same rule as UnanimousJudge: a hold in either is a hold, the first
+    run's score and ratings stand, and reasons from both are kept.
+    """
+    others = {r["case"]: r for r in second}
+    if set(others) != {r["case"] for r in first}:
+        raise SystemExit("the two runs are not on the same cases")
+    combined = []
+    for mine in first:
+        other = others[mine["case"]]
+        row = dict(mine)
+        held = next((r for r in (mine, other) if r["status"] == "HELD"), None)
+        if held is not None:
+            row.update(status="HELD", score=None, rewardable=None, hold_reason=held["hold_reason"])
+        elif mine["status"] == "SCORED" and other["status"] == "SCORED":
+            row["rewardable"] = bool(mine["rewardable"] and other["rewardable"])
+            row["reasons"] = list(dict.fromkeys(mine["reasons"] + other["reasons"]))
+        combined.append(row)
+    return combined
 
 
 def text_filter(campaign: Path | None) -> TextFormatFilter | None:
@@ -135,6 +172,10 @@ def held_out_pay_line(results: list[dict]) -> dict:
 
 
 def main() -> int:
+    if len(sys.argv) == 4 and sys.argv[1] == "--combine":
+        runs = [json.loads(Path(name).read_text(encoding="utf-8"))["results"] for name in sys.argv[2:]]
+        print(json.dumps(summarise(combine(*runs)), indent=2))
+        return 0
     if len(sys.argv) == 3 and sys.argv[1] == "--summarise":
         # Recompute the summary of an earlier --out file without a model.
         saved = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))

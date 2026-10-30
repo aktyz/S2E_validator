@@ -31,6 +31,7 @@ The judge (default `S2E_JUDGE=stub`: fixed ratings, no content reaches a model):
 | `S2E_JUDGE_MODEL` | With `model`: the served model's name. Required. |
 | `S2E_JUDGE_API_KEY` | Optional. Sent as a bearer token to that server; never logged. |
 | `S2E_JUDGE_TIMEOUT` | Optional. Seconds per model call (default 60). |
+| `S2E_JUDGE_SECOND_URL`, `S2E_JUDGE_SECOND_MODEL` | Optional, both or neither. A second self-hosted model with a veto: a submission is paid only if both models would pay it (`judge/unanimous.py`). It shares the key and timeout. |
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from fastapi import FastAPI
 
 from ..judge import RUBRIC_V1, Judge, ModelJudge, StubJudge
 from ..judge.chat_client import ChatCompletionsClient
+from ..judge.unanimous import UnanimousJudge
 from ..prefilters import FilterDependencies, build_pipeline, load_config
 from ..settlement import (
     MAX_BATCH_SIZE,
@@ -158,17 +160,27 @@ def _judge(env: Mapping[str, str]) -> Judge:
     missing = [name for name in ("S2E_JUDGE_URL", "S2E_JUDGE_MODEL") if not env.get(name)]
     if missing:
         raise SettingsError(f"S2E_JUDGE=model also needs {', '.join(missing)}")
+    second = [name for name in ("S2E_JUDGE_SECOND_URL", "S2E_JUDGE_SECOND_MODEL") if env.get(name)]
+    if len(second) == 1:
+        raise SettingsError("S2E_JUDGE_SECOND_URL and S2E_JUDGE_SECOND_MODEL go together")
+    endpoints = [(env["S2E_JUDGE_URL"], env["S2E_JUDGE_MODEL"])]
+    if second:
+        endpoints.append((env["S2E_JUDGE_SECOND_URL"], env["S2E_JUDGE_SECOND_MODEL"]))
     try:
-        client = ChatCompletionsClient(
-            env["S2E_JUDGE_URL"],
-            env["S2E_JUDGE_MODEL"],
-            api_key=env.get("S2E_JUDGE_API_KEY") or None,
-            timeout=float(env.get("S2E_JUDGE_TIMEOUT", "60")),
-        )
+        clients = [
+            ChatCompletionsClient(
+                url,
+                model,
+                api_key=env.get("S2E_JUDGE_API_KEY") or None,
+                timeout=float(env.get("S2E_JUDGE_TIMEOUT", "60")),
+            )
+            for url, model in endpoints
+        ]
     except ValueError as exc:
         raise SettingsError(f"judge settings: {exc}") from None
-    logger.info("judge model=%s", client.name)
-    return ModelJudge(client, RUBRIC_V1)
+    logger.info("judge models=%s", " + ".join(client.name for client in clients))
+    judges = [ModelJudge(client, RUBRIC_V1) for client in clients]
+    return judges[0] if len(judges) == 1 else UnanimousJudge(judges)
 
 
 def _chain(settings: ServiceSettings, env: Mapping[str, str]) -> tuple[ChainClient, str, str, int]:
