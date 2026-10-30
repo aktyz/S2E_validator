@@ -176,8 +176,16 @@ class Rubric:
 #: describe them. Language is not graded: no criterion asks for one. Thresholds
 #: here are starting points; J2 and J3 (#43) measure them against
 #: hand-labelled submissions.
+#:
+#: v1.1 lowers the pay line from 40 to 30, from the first measurement
+#: (calibration/measure_judge.py, Qwen2.5-VL-7B, 232 labelled cases on 73 of
+#: our own photos). Scores came in a few values only: generic and mismatched
+#: descriptions never above 17, a good one most often 36 (ratings 3, 2, 2). At
+#: 40 the judge paid 30 of 73 good descriptions; at 30 it pays 67 and still no
+#: generic or mismatched one. Provisional: short descriptions written by us,
+#: to be checked again on real submissions.
 RUBRIC_V1 = Rubric(
-    version="rubric-v1",
+    version="rubric-v1.1",
     campaign_brief=(
         "Contributors take their own photo of a place, object or everyday scene and "
         "write a short description of it. A good description says what is actually in "
@@ -213,5 +221,5 @@ RUBRIC_V1 = Rubric(
     blocking_reasons=frozenset(
         {"DESCRIPTION_MISMATCH", "NOT_A_PHOTO", "INSTRUCTIONS_TO_JUDGE"}
     ),
-    min_rewardable_score=40,
+    min_rewardable_score=30,
 )

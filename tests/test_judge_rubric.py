@@ -28,8 +28,16 @@ class TestRubricScore:
         assert RUBRIC_V1.score(accurate) > RUBRIC_V1.score(effortful)
 
     def test_threshold_decides_rewardable(self):
-        assert RUBRIC_V1.is_rewardable(40, ())
-        assert not RUBRIC_V1.is_rewardable(39, ())
+        assert RUBRIC_V1.is_rewardable(30, ())
+        assert not RUBRIC_V1.is_rewardable(29, ())
+
+    def test_the_measured_scores_fall_on_the_right_side(self):
+        """v1.1's line: the typical good rating pays, the best generic one does not."""
+        good = RUBRIC_V1.score({"relevance": 3, "specificity": 2, "effort": 2})
+        best_generic = RUBRIC_V1.score({"relevance": 2, "specificity": 1, "effort": 2})
+
+        assert (good, best_generic) == (36, 17)
+        assert RUBRIC_V1.is_rewardable(good, ()) and not RUBRIC_V1.is_rewardable(best_generic, ())
 
     @pytest.mark.parametrize("code", sorted(RUBRIC_V1.blocking_reasons))
     def test_a_blocking_reason_overrides_any_score(self, code):

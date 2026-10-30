@@ -29,6 +29,7 @@ REASON_REPEATED_PATTERN = "TEXT_REPEATED_PATTERN"
 REASON_LOW_VARIETY = "TEXT_LOW_CHARACTER_VARIETY"
 REASON_INSTRUCTION_ECHO = "TEXT_INSTRUCTION_ECHO"
 REASON_LOOKS_TRUNCATED = "TEXT_LOOKS_TRUNCATED"
+REASON_ADDRESSES_GRADER = "TEXT_ADDRESSES_GRADER"
 
 REPLACEMENT_CHARACTER = "\ufffd"
 #: Unicode category Cc only, minus the whitespace people actually type. Format
@@ -67,6 +68,14 @@ class TextFormatSettings:
     #: Empty until the client app's real strings are known (see #28).
     placeholders: Sequence[str] = field(default_factory=tuple)
     flag_truncated: bool = True
+    #: Regular expressions (case-insensitive) for text written to the grader
+    #: rather than about the photo: "ignore the rubric", "rate every criterion
+    #: 5", "SYSTEM:". A match is rejected before the judge sees it. Measured on
+    #: our labelled set, the judge model obeyed such text 8 times in 13, so it
+    #: cannot be left to the model alone. Language-specific, so a campaign
+    #: setting and empty by default. It catches the known phrasings only; the
+    #: judge's own INSTRUCTIONS_TO_JUDGE reason stays the second line.
+    grader_patterns: Sequence[str] = field(default_factory=tuple)
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> TextFormatSettings:
@@ -81,6 +90,12 @@ class TextFormatSettings:
         require_float(parsed.min_character_variety, "min_character_variety", 0.0, 1.0)
         require_str_sequence(parsed.placeholders, "placeholders")
         require_bool(parsed.flag_truncated, "flag_truncated")
+        require_str_sequence(parsed.grader_patterns, "grader_patterns")
+        for pattern in parsed.grader_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"grader_patterns: {pattern!r} is not a valid pattern: {exc}") from None
         return parsed
 
 
@@ -94,6 +109,9 @@ class TextFormatFilter(PreFilter):
         self._settings = settings or TextFormatSettings()
         self._placeholders = tuple(
             normalize(p).casefold() for p in self._settings.placeholders if p.strip()
+        )
+        self._grader_patterns = tuple(
+            re.compile(p, re.IGNORECASE) for p in self._settings.grader_patterns if p.strip()
         )
 
     def check(self, interaction: Interaction) -> PreFilterResult:
@@ -109,6 +127,7 @@ class TextFormatFilter(PreFilter):
             self._length_failure,
             self._control_failure,
             self._echo_failure,
+            self._grader_failure,
             self._junk_verdict,
             self._truncation_flag,
         )
@@ -166,6 +185,13 @@ class TextFormatFilter(PreFilter):
         folded = normalized.casefold()
         if any(folded == placeholder for placeholder in self._placeholders):
             return PreFilterResult.rejected(REASON_INSTRUCTION_ECHO, confidence=1.0)
+        return None
+
+    def _grader_failure(self, normalized: str) -> PreFilterResult | None:
+        for index, pattern in enumerate(self._grader_patterns):
+            if pattern.search(normalized):
+                # The index, not the text: the description stays out of logs.
+                return PreFilterResult.rejected(REASON_ADDRESSES_GRADER, confidence=0.9, pattern=index)
         return None
 
     def _junk_verdict(self, normalized: str) -> PreFilterResult | None:

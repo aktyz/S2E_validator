@@ -31,7 +31,7 @@ class TestModelJudge:
         assert verdict.quality_score == 75
         assert verdict.is_rewardable
         assert verdict.attempts == 1
-        assert verdict.provenance == Provenance("scripted", prompt_version(RUBRIC_V1), "rubric-v1")
+        assert verdict.provenance == Provenance("scripted", prompt_version(RUBRIC_V1), "rubric-v1.1")
 
     def test_a_manipulation_attempt_is_never_rewardable(self):
         top_marks = {n: 5 for n in RUBRIC_V1.criterion_names}

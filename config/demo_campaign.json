@@ -6,13 +6,28 @@
       "settings": {
         "min_chars": 20,
         "max_chars": 2000,
-        "placeholders": []
+        "placeholders": [],
+        "grader_patterns": [
+          "\\bignore\\b.{0,40}\\b(?:rubric|instructions?|rules|criteria|above|previous|prompt)\\b",
+          "\\b(?:rate|score|grade|mark)\\b.{0,30}\\b(?:every|all|each)\\b.{0,25}\\b(?:criteri(?:on|a)|5|five)\\b",
+          "\\b(?:full|maximum|max|perfect|top|highest)\\s+(?:marks?|points?|score|scores|rating|grade)\\b",
+          "(?:^|[\\s(\\[])(?:system|assistant|developer)\\s*:",
+          "<\\|[a-z_]+\\|>|</?(?:description|instructions?|system|prompt)>",
+          "\\b(?:grader|graders|evaluator|rubric|grading)\\b",
+          "\\bevaluation (?:is|was) (?:over|complete|finished|done)\\b",
+          "\\b(?:relevance|specificity|effort)\\s*[:=]?\\s*[1-5]\\b",
+          "\\bpre-?approved\\b"
+        ]
       }
     },
     "image_format": {
       "mode": "enforce",
       "settings": {
-        "allowed_formats": ["JPEG", "PNG", "WEBP"],
+        "allowed_formats": [
+          "JPEG",
+          "PNG",
+          "WEBP"
+        ],
         "min_width": 256,
         "min_height": 256
       }

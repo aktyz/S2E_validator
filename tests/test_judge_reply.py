@@ -78,7 +78,7 @@ class TestVerdict:
         payload = json.loads(json.dumps(verdict.to_dict()))
 
         assert payload["quality_score"] == 75
-        assert payload["judge"]["rubric_version"] == "rubric-v1"
+        assert payload["judge"]["rubric_version"] == "rubric-v1.1"
         assert payload["flags"] == ["DUPLICATE_IMAGE_TEXT_ONLY"]
 
     @pytest.mark.parametrize(
