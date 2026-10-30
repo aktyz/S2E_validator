@@ -150,8 +150,8 @@ def main() -> int:
         labels = load_labels(args.labels, args.photos)
     except LabelError as exc:
         raise SystemExit(f"labels: {exc}") from None
-    if args.out is not None and not args.out.resolve().parent.is_dir():
-        raise SystemExit(f"--out: {args.out.resolve().parent} is not a folder")
+    if args.out is not None and (args.out.is_dir() or not args.out.resolve().parent.is_dir()):
+        raise SystemExit(f"--out: {args.out} must be a file in an existing folder")
     judge = build_judge(args.judge)
     check = text_filter(args.campaign)
 

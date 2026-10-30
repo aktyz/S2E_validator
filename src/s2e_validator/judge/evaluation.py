@@ -18,9 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .contract import JudgeVerdict
+from .contract import JudgeVerdict, Provenance
 from .rubric import RUBRIC_V1, Rubric
-from .unanimous import REASON_JUDGES_DISAGREE
+from .unanimous import combined_provenance, veto
 
 #: Statuses that decided a case: the judge scored it, or Stage 1 rejected it.
 DECIDED = ("SCORED", "REJECTED")
@@ -268,18 +268,24 @@ def combine(first: Sequence[Mapping[str, Any]], second: Sequence[Mapping[str, An
         if held is not None:
             row.update(status="HELD", score=None, rewardable=None, hold_reason=held["hold_reason"])
         elif mine["status"] == "SCORED":
-            votes = (bool(mine["rewardable"]), bool(other["rewardable"]))
-            row["rewardable"] = all(votes)
+            rewardable, reasons = veto(
+                [bool(mine["rewardable"]), bool(other["rewardable"])], [mine["reasons"], other["reasons"]]
+            )
+            row["rewardable"] = rewardable
+            row["reasons"] = list(reasons)
             row["second_score"] = other["score"]
-            row["reasons"] = list(dict.fromkeys(list(mine["reasons"]) + list(other["reasons"])))
-            if len(set(votes)) > 1:
-                row["reasons"].append(REASON_JUDGES_DISAGREE)
         combined.append(row)
     return combined
 
 
 def _combined_judge(first: Mapping[str, Any] | None, second: Mapping[str, Any] | None) -> dict[str, str] | None:
-    """Provenance naming both runs, as UnanimousJudge does for live verdicts."""
+    """Provenance naming both runs, the way UnanimousJudge does for live verdicts."""
     if not first or not second:
         return dict(first or second) if (first or second) else None
-    return {key: " + ".join(dict.fromkeys((first[key], second[key]))) for key in first}
+    joined = combined_provenance([_provenance(first), _provenance(second)])
+    return {"model": joined.model, "prompt_version": joined.prompt_version, "rubric_version": joined.rubric_version}
+
+
+def _provenance(saved: Mapping[str, Any]) -> Provenance:
+    """A saved row's provenance; a field an older run did not record stays empty."""
+    return Provenance(saved.get("model", ""), saved.get("prompt_version", ""), saved.get("rubric_version", ""))

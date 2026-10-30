@@ -19,6 +19,8 @@ from s2e_validator.judge.evaluation import (
     summarise,
 )
 
+from s2e_validator.judge.unanimous import veto
+
 from helpers import item
 
 
@@ -246,7 +248,41 @@ class TestCombining:
         assert (combined["score"], combined["second_score"]) == (56, 11)
 
     def test_provenance_names_both_runs(self):
-        first = dict(row(case="a"), judge={"model": "qwen", "rubric_version": "v1"})
-        second = dict(row(case="a"), judge={"model": "nemotron", "rubric_version": "v1"})
+        first = dict(row(case="a"), judge={"model": "qwen", "prompt_version": "p", "rubric_version": "v1"})
+        second = dict(row(case="a"), judge={"model": "nemotron", "prompt_version": "p", "rubric_version": "v1"})
 
-        assert combine([first], [second])[0]["judge"] == {"model": "qwen + nemotron", "rubric_version": "v1"}
+        assert combine([first], [second])[0]["judge"] == {
+            "model": "qwen + nemotron", "prompt_version": "p", "rubric_version": "v1",
+        }
+
+    def test_two_runs_of_one_model_stay_visibly_two(self):
+        """F-02 of #13: a repeat run must not read as a single run."""
+        judge = {"model": "qwen", "prompt_version": "p", "rubric_version": "v1"}
+
+        combined = combine([dict(row(case="a"), judge=judge)], [dict(row(case="a"), judge=judge)])
+
+        assert combined[0]["judge"]["model"] == "qwen + qwen"
+
+    def test_a_field_missing_from_an_older_run_is_not_a_crash(self):
+        first = dict(row(case="a"), judge={"model": "qwen"})
+        second = dict(row(case="a"), judge={"model": "nemotron", "prompt_version": "p", "rubric_version": "v1"})
+
+        assert combine([first], [second])[0]["judge"]["model"] == "qwen + nemotron"
+
+    @pytest.mark.parametrize(
+        "votes, reasons",
+        [
+            ((True, True), ([], [])),
+            ((True, False), (["LOW_EFFORT"], ["GENERIC_DESCRIPTION"])),
+            ((False, True), (["LOW_EFFORT"], ["LOW_EFFORT"])),
+            ((False, False), (["LOW_EFFORT"], [])),
+        ],
+    )
+    def test_saved_runs_and_live_judges_decide_alike(self, votes, reasons):
+        """F-01 of #13: both go through the same rule."""
+        combined = combine(
+            [row(case="a", rewardable=votes[0], reasons=reasons[0])],
+            [row(case="a", rewardable=votes[1], reasons=reasons[1])],
+        )[0]
+
+        assert (combined["rewardable"], tuple(combined["reasons"])) == veto(votes, reasons)

@@ -20,6 +20,20 @@ from .judge import Judge
 REASON_JUDGES_DISAGREE = "JUDGES_DISAGREE"
 
 
+def veto(votes: Sequence[bool], reasons: Sequence[Sequence[str]]) -> tuple[bool, tuple[str, ...]]:
+    """The rule itself: paid only if every vote pays, reasons from all kept.
+
+    Reasons keep their order without repeats, and a disagreement is marked.
+    Live verdicts and saved runs both decide here, so the two cannot drift.
+    """
+    merged: list[str] = []
+    for codes in reasons:
+        merged.extend(code for code in codes if code not in merged)
+    if len(set(votes)) > 1:
+        merged.append(REASON_JUDGES_DISAGREE)
+    return all(votes), tuple(merged)
+
+
 class UnanimousJudge:
     """Pays only what every judge would pay; holds if any judge holds.
 
@@ -35,7 +49,7 @@ class UnanimousJudge:
 
     def judge(self, item: JudgeInput) -> JudgeVerdict:
         verdicts = [judge.judge(item) for judge in self._judges]
-        provenance = _combined(v.provenance for v in verdicts)
+        provenance = combined_provenance([v.provenance for v in verdicts])
         attempts = max(v.attempts for v in verdicts)
 
         held = next((v for v in verdicts if v.status is JudgeStatus.HELD), None)
@@ -43,23 +57,20 @@ class UnanimousJudge:
             return JudgeVerdict.held(item, provenance, held.hold_reason, attempts)
 
         primary = verdicts[0]
-        votes = [v.is_rewardable for v in verdicts]
-        reasons: list[str] = []
-        for verdict in verdicts:
-            reasons.extend(code for code in verdict.reason_codes if code not in reasons)
-        if len(set(votes)) > 1:
-            reasons.append(REASON_JUDGES_DISAGREE)
+        rewardable, reasons = veto(
+            [v.is_rewardable for v in verdicts], [v.reason_codes for v in verdicts]
+        )
         return replace(
             primary,
             provenance=provenance,
-            is_rewardable=all(votes),
-            reason_codes=tuple(reasons),
+            is_rewardable=rewardable,
+            reason_codes=reasons,
             attempts=attempts,
         )
 
 
-def _combined(provenances) -> Provenance:
-    provenances = list(provenances)
+def combined_provenance(provenances: Sequence[Provenance]) -> Provenance:
+    """Every model named, even a repeat; each version once."""
     return Provenance(
         model=" + ".join(p.model for p in provenances),
         prompt_version=" + ".join(dict.fromkeys(p.prompt_version for p in provenances)),

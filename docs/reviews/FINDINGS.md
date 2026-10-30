@@ -36,13 +36,14 @@ Do not post anything to GitHub and do not touch the PR_10_REVIEW.md file.
 | #4 | 0 | 6 | 5 | 0 | 0 |
 | #5 | 0 | 7 | 0 | 0 | 0 |
 | #7 | 0 | 5 | 0 | 0 | 1 |
-| #10 | 3 | 0 | 5 | 0 | 0 |
+| #10 | 2 | 1 | 5 | 0 | 0 |
 | #11 | 0 | 9 | 6 | 0 | 0 |
 | #12 | 0 | 3 | 11 | 0 | 0 |
+| #13 | 0 | 0 | 7 | 0 | 0 |
 
 Status values: `open` (reported, not yet re-checked), `persists`, `fixed`, `dropped` (the author declined it and the reviewer agreed), `unclear`. Each status change gets a date.
 
-Last persistence check: 2026-10-30, after PR #10, against the checkout at `e86697c` (`fix/measure-review`). That branch descends from `a63cf94` and does not contain `01af453` / `8327445` (the licence commits of PR #12).
+Last update: 2026-10-30, fixes on `fix/address-reviews` (PR #13). Entries marked "Fixed (2026-10-30, fix/address-reviews)" were changed there. The last full persistence check was earlier the same day, against `e86697c`, and predates those fixes.
 
 ---
 
@@ -270,9 +271,10 @@ Source: `docs/reviews/PR_10_REVIEW.md`, round 1, reviewed `e86697c` on 2026-10-3
   - Fix: `combine()` pays a case the second run rejected at Stage 1 (SCORED and rewardable in `mine`, REJECTED in `other`), so the result depends on argument order. Refuse runs where exactly one side is REJECTED (made with different `--campaign` settings), and add a test.
   - Fixed (2026-10-30, fix/address-reviews): `combine()` raises `RunMismatch` when exactly one side is REJECTED; `test_a_case_rejected_in_only_one_run_is_refused_in_either_order`. Saved runs still give 260/268.
 
-- **F-02** · 🟠 Design · `calibration/measure_judge.py` · **open** (2026-10-30)
+- **F-02** · 🟠 Design · `calibration/measure_judge.py` · **persists** (2026-10-30)
   - Anchor: `def build_judge(kind: str) -> Judge:`
   - Fix: `build_judge` is a copy of `_judge` in `api/main.py` (and `DEFAULT_TIMEOUT` duplicates the service's `"60"`), so the two can drift again. Move a `model_judge_from_env(env) -> Judge` that raises `ValueError` into the judge package (`api.main` imports `fastapi`, so the script can't import it), and have both callers wrap the error.
+  - Re-check (2026-10-30): the same issue as PR #11 F-03; still a copy.
 
 - **F-03** · 🟠 Design · `calibration/measure_judge.py` · **fixed** (2026-10-30)
   - Anchor: `summary = write(args.out, results)`
@@ -490,3 +492,37 @@ Source: `docs/reviews/PR_12_REVIEW.md`, round 1, reviewed `8327445` on 2026-10-3
   - Anchor: `sudo docker run -d --name "$name" --restart unless-stopped --gpus all \`
   - Fix: after a preemption, `--restart unless-stopped` starts both containers at once, breaking the "one after the other" start the script relies on. Test a restart; if it doesn't recover, use a systemd unit that reruns the start sequence.
   - Evidence (2026-10-30, after PR #10): anchor unchanged; still `--restart unless-stopped`, and the script has no systemd unit.
+
+---
+
+## PR #13 — Review findings, and the fixes for #10, #11 and #12
+
+Source: review on GitHub of `e6d4946` on 2026-10-30.
+
+- **F-01** · 🟠 Design · `src/s2e_validator/judge/evaluation.py` · **fixed** (2026-10-30)
+  - Fix: the veto rule existed twice, in `UnanimousJudge.judge` and in `combine()`.
+  - Fixed (2026-10-30, fix/address-reviews): both call `veto()` in `judge/unanimous.py`; `test_saved_runs_and_live_judges_decide_alike` covers every vote pair.
+
+- **F-02** · 🟡 Style · `src/s2e_validator/judge/evaluation.py` · **fixed** (2026-10-30)
+  - Fix: `_combined_judge` removed repeated model names and failed on a field missing from one run.
+  - Fixed (2026-10-30, fix/address-reviews): it now uses `combined_provenance()`, the live join; two runs of one model read "qwen + qwen", and a missing field stays empty. Both tested.
+
+- **F-03** · 🟡 Style · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fix: an `--out` that is itself a folder passed the check.
+  - Fixed (2026-10-30, fix/address-reviews): refused before any model call.
+
+- **F-04** · 🟡 Style · `docs/reviews/FINDINGS.md` · **fixed** (2026-10-30)
+  - Fix: the header described an older checkout, and PR #10 F-02 was still `open`.
+  - Fixed (2026-10-30, fix/address-reviews): header updated; PR #10 F-02 is `persists`, the same issue as PR #11 F-03.
+
+- **F-06** · 🔵 Question · `README.md` · **fixed** (2026-10-30)
+  - Fix: confirm the copyright owner.
+  - Fixed (2026-10-30, by Zyta in `70386ec`): the README names both authors.
+
+- **F-07** · 🔵 Question · `README.md` · **fixed** (2026-10-30)
+  - Fix: name the saved run behind each pay-line figure.
+  - Fixed (2026-10-30, fix/address-reviews): 105/108 at 30, 101/108 at 12 and 87/108 at 40 all come from `results_qwen7b_v2.json` (244 cases, 108 on the checked half), so they are correctly under the Qwen heading. The README names that run and adds the current prompt's figures from `results_qwen7b_v4.json` (268 cases): 105/108, 107/108, 82/108.
+
+- **F-08** · 🔵 Question · `docs/reviews/FINDINGS.md` · **fixed** (2026-10-30)
+  - Fix: add the missing `## PR #2` section.
+  - Fixed (2026-10-30, by Zyta): section added.
