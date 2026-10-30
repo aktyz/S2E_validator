@@ -32,6 +32,7 @@ Do not post anything to GitHub and do not touch the PR_10_REVIEW.md file.
 
 | PR | Open | Persists | Fixed | Dropped | Unclear |
 |----|------|----------|-------|---------|---------|
+| #2 | 0 | 0 | 11 | 0 | 0 |
 | #4 | 0 | 6 | 5 | 0 | 0 |
 | #5 | 0 | 7 | 0 | 0 | 0 |
 | #7 | 0 | 5 | 0 | 0 | 1 |
@@ -42,6 +43,37 @@ Do not post anything to GitHub and do not touch the PR_10_REVIEW.md file.
 Status values: `open` (reported, not yet re-checked), `persists`, `fixed`, `dropped` (the author declined it and the reviewer agreed), `unclear`. Each status change gets a date.
 
 Last persistence check: 2026-10-30, after PR #10, against the checkout at `e86697c` (`fix/measure-review`). That branch descends from `a63cf94` and does not contain `01af453` / `8327445` (the licence commits of PR #12).
+
+---
+
+## PR #2 — Measure a judge against hand-checked labels
+
+Source: `docs/reviews/PR_2_REVIEW.md`, round 1, reviewed `14e837f` on 2026-10-29.
+
+All eleven findings were answered in PR #10 ("Review of #2") and checked one by one in `docs/reviews/PR_10_REVIEW.md`. What was left over is tracked under PR #10.
+
+- **F-01** · 🔴 Bug · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: `_reasons_given` in `judge/evaluation.py` accepts a string or a list; a list needs every code. Pinned by a parametrized test.
+- **F-02** · 🔴 Bug · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: only scored cases count; held and Stage-1-stopped cases are counted apart.
+- **F-03** · 🟠 Design · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: `load_labels` checks every line and photo before any model call, and a stopped run still writes its results. Left over: a missing `--out` folder (PR #10 F-03, fixed) and reporting every problem at once (PR #10 F-07, open).
+- **F-04** · 🟠 Design · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: rows are built by `judged_row` on `JudgeVerdict.to_dict()`, and `rejected_row`.
+- **F-05** · 🟠 Design · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: the measurement logic moved to `src/s2e_validator/judge/evaluation.py`, tested in `tests/test_evaluation.py`.
+- **F-06** · 🟡 Style · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: a missing or half-set setting exits with a sentence.
+- **F-07** · 🟡 Style · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: typed against the `Judge` Protocol.
+- **F-08** · 🟡 Style · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: every row carries provenance from `to_dict()`, and the top level of the results file names the judge.
+- **F-09** · 🟡 Style · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: the usage line and the README say to install the package first.
+- **F-10** · 🔵 Question · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: `load_labels` refuses repeated case ids and repeated (photo, kind) pairs.
+- **F-11** · 🔵 Question · `calibration/measure_judge.py` · **fixed** (2026-10-30)
+  - Fixed in PR #10: timeout, temperature, length and JSON mode match `api/main.py`. They match by copying the service's factory, not sharing it; that carries on as PR #10 F-02 (open).
 
 ---
 
@@ -429,7 +461,7 @@ Source: `docs/reviews/PR_12_REVIEW.md`, round 1, reviewed `8327445` on 2026-10-3
   - Anchor: `[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)`
   - Fix: no copyright statement anywhere. Add a `## License` section (`Copyright 2026 <owner>…`) or a `NOTICE` file; leave `LICENSE` unmodified.
   - Evidence (2026-10-30, after PR #10): the anchor (the licence badge) isn't in this checkout's `README.md`, and there is no `## License` section or copyright line either. But the checkout (`e86697c`) doesn't contain `01af453` / `8327445`, the commits that added the licence. At session start, HEAD's history went `e86697c` → `e6a130c` → `a63cf94`. So what's missing here says nothing about `main`. Whether a `NOTICE` file exists would need a folder check.
-  - Fixed (2026-10-30, fix/address-reviews): badge is on `main` (came in with PR #12) and GitHub detects Apache-2.0. Added a `## License` section with a copyright line for "the Survey2Earn authors"; `LICENSE` unmodified. Zyta to confirm the owner name.
+  - Fixed (2026-10-30, fix/address-reviews): badge is on `main` (came in with PR #12) and GitHub detects Apache-2.0. Added a `## License` section with a copyright line for "the Survey2Earn authors"; `LICENSE` unmodified. Owner confirmed by Zyta (2026-10-30): the Survey2Earn authors, Zyta Slowianska and Emmanuel Nwanguma.
 
 - **F-10** · 🟡 Style · PR description (not a file) · **persists** (2026-10-30)
   - Anchor: none (PR metadata)

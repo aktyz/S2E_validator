@@ -784,8 +784,8 @@ Every setting is listed in `api/main.py`.
 |---|---|---|
 | 100 | 100 base units = 0.000100 | 1.000000 |
 | 75 (every stub verdict) | 75 = 0.000075 | 0.750000 |
-| 40 (the lowest rewardable) | 40 = 0.000040 | 0.400000 |
-| below 40, held, or a duplicate photo | nothing; left out of the batch | nothing |
+| 30 (the lowest rewardable) | 30 = 0.000030 | 0.300000 |
+| below 30, held, or a duplicate photo | nothing; left out of the batch | nothing |
 
 Amounts are in a 6-decimal mint. The demo's run 0 can pay 100,000 base units in total, so it runs at 1 unit per point with a maximum of 100, which covers about 1,300 paid submissions (#87). With `S2E_CHAIN=solana` the service refuses to start if `S2E_MAX_UNITS_PER_SUBMISSION` is more than the run can still pay: otherwise every reward would wait as `batched` with no error.
 
@@ -869,4 +869,4 @@ Logs: `journalctl -u s2e-validator -f`. A line starting `settlement_halted` mean
 
 ## License
 
-Copyright 2026 the Survey2Earn authors. Licensed under the Apache License, Version 2.0: see [LICENSE](LICENSE).
+Copyright 2026 the Survey2Earn authors: Zyta Slowianska and Emmanuel Nwanguma. Licensed under the Apache License, Version 2.0: see [LICENSE](LICENSE).
