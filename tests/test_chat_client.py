@@ -60,7 +60,7 @@ class TestTheRequest:
         assert url == URL + "/chat/completions"
         assert system == {"role": "system", "content": prompt().system}
         assert user["role"] == "user"
-        assert [part["type"] for part in user["content"]] == ["text", "image_url", "text"]
+        assert [part["type"] for part in user["content"]] == ["text", "image_url", "text", "text"]
 
     def test_the_photo_is_sent_as_its_own_bytes(self):
         server = FakeServer(answer(reply()))
