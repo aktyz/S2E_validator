@@ -10,8 +10,10 @@ set -euo pipefail
 
 # Two judges on one 48 GB L40S, each on its own port, 127.0.0.1 only. A
 # submission is paid only if both would pay it (judge/unanimous.py):
-#   S2E_JUDGE_URL=http://localhost:8001/v1         S2E_JUDGE_MODEL=judge
-#   S2E_JUDGE_SECOND_URL=http://localhost:8002/v1  S2E_JUDGE_SECOND_MODEL=judge
+#   S2E_JUDGE_URL=http://localhost:8001/v1         S2E_JUDGE_MODEL=<QWEN below>
+#   S2E_JUDGE_SECOND_URL=http://localhost:8002/v1  S2E_JUDGE_SECOND_MODEL=<NEMOTRON below>
+# Each server answers to its model's own name, so every verdict's provenance
+# names the real models.
 # The memory shares are what fits both: Qwen in BF16 (about 16.6 GB of
 # weights) and Nemotron in NVIDIA's FP8 build (15.4 GB; the BF16 build, about
 # 25 GB, leaves no room for the working memory of either). The L40S runs FP8
@@ -50,7 +52,6 @@ serve() {  # name port model memory-share [extra vLLM flags]
     --ipc=host \
     "$VLLM_IMAGE" \
     --model "$model" \
-    --served-model-name judge \
     --dtype bfloat16 \
     --max-model-len 8192 \
     --limit-mm-per-prompt '{"image": 1}' \

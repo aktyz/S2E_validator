@@ -104,9 +104,10 @@ Reproduce:
 # On a GPU machine (Ubuntu with NVIDIA drivers): serve both models on 127.0.0.1:8001 and :8002
 bash deploy/judge-gpu.sh
 
-# Then, with the labels and photos (kept out of this repository: the photos are contributors' own)
-S2E_JUDGE_URL=http://localhost:8001/v1 S2E_JUDGE_MODEL=judge \
-S2E_JUDGE_SECOND_URL=http://localhost:8002/v1 S2E_JUDGE_SECOND_MODEL=judge \
+# Then install the package, and run with the labels and photos (kept out of this repository: the photos are contributors' own)
+python -m pip install -e .
+S2E_JUDGE_URL=http://localhost:8001/v1 S2E_JUDGE_MODEL=Qwen/Qwen2.5-VL-7B-Instruct \
+S2E_JUDGE_SECOND_URL=http://localhost:8002/v1 S2E_JUDGE_SECOND_MODEL=nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8 \
   python calibration/measure_judge.py labels.jsonl photos/ --judge model \
   --campaign config/demo_campaign.json --out results.json
 
