@@ -10,6 +10,7 @@ from s2e_validator.judge import RUBRIC_V1, StubJudge
 from s2e_validator.judge.evaluation import (
     Label,
     LabelError,
+    RunMismatch,
     combine,
     held_out_pay_line,
     judged_row,
@@ -17,6 +18,8 @@ from s2e_validator.judge.evaluation import (
     rejected_row,
     summarise,
 )
+
+from s2e_validator.judge.unanimous import veto
 
 from helpers import item
 
@@ -103,6 +106,26 @@ class TestPayLine:
 
         assert line["line"] == 18
         assert (line["chosen_on"], line["held_out"]) == ("2/2", "2/2")
+
+    def test_a_combined_run_applies_the_line_to_the_lower_score(self):
+        """F-02 of #11: the first judge's score alone would ignore the veto."""
+        first = [
+            row(case="1", photo="a.jpg", kind="generic", score=56, expect=False),
+            row(case="2", photo="b.jpg", kind="generic", score=56, expect=False),
+        ]
+        second = [
+            row(case="1", photo="a.jpg", kind="generic", score=11, rewardable=False, expect=False),
+            row(case="2", photo="b.jpg", kind="generic", score=11, rewardable=False, expect=False),
+        ]
+
+        line = held_out_pay_line(combine(first, second))
+
+        assert line["line"] == 12
+        assert line["held_out"] == "1/1"
+        assert line["scored_on"] == "both judges"
+
+    def test_a_live_run_says_its_line_is_the_first_judge_alone(self):
+        assert held_out_pay_line([row(photo="a.jpg")])["scored_on"] == "first judge only"
 
     def test_a_blocking_reason_is_never_paid_whatever_the_line(self):
         rows = [row(photo="a.jpg", kind="mismatch", score=90, reasons=["DESCRIPTION_MISMATCH"],
@@ -201,5 +224,65 @@ class TestCombining:
         assert combined[0]["status"] == "HELD" and combined[0]["rewardable"] is None
 
     def test_different_cases_are_refused(self):
-        with pytest.raises(LabelError, match="same cases"):
+        with pytest.raises(RunMismatch, match="same cases"):
             combine([row(case="a")], [row(case="b")])
+
+    @pytest.mark.parametrize("flip", [False, True])
+    def test_a_case_rejected_in_only_one_run_is_refused_in_either_order(self, flip):
+        """F-01 of #10: otherwise the result depends on the argument order."""
+        scored = [row(case="a")]
+        rejected = [row(case="a", status="REJECTED", score=0, rewardable=False)]
+
+        with pytest.raises(RunMismatch, match="only one run"):
+            combine(*((rejected, scored) if flip else (scored, rejected)))
+
+    def test_a_case_both_runs_rejected_stays_rejected(self):
+        rejected = [row(case="a", status="REJECTED", score=0, rewardable=False, reasons=["TEXT_ADDRESSES_GRADER"])]
+
+        assert combine(rejected, rejected)[0]["status"] == "REJECTED"
+
+    def test_a_disagreement_is_marked_and_the_second_score_kept(self):
+        combined = combine([row(case="a", score=56)], [row(case="a", score=11, rewardable=False)])[0]
+
+        assert combined["reasons"] == ["JUDGES_DISAGREE"]
+        assert (combined["score"], combined["second_score"]) == (56, 11)
+
+    def test_provenance_names_both_runs(self):
+        first = dict(row(case="a"), judge={"model": "qwen", "prompt_version": "p", "rubric_version": "v1"})
+        second = dict(row(case="a"), judge={"model": "nemotron", "prompt_version": "p", "rubric_version": "v1"})
+
+        assert combine([first], [second])[0]["judge"] == {
+            "model": "qwen + nemotron", "prompt_version": "p", "rubric_version": "v1",
+        }
+
+    def test_two_runs_of_one_model_stay_visibly_two(self):
+        """F-02 of #13: a repeat run must not read as a single run."""
+        judge = {"model": "qwen", "prompt_version": "p", "rubric_version": "v1"}
+
+        combined = combine([dict(row(case="a"), judge=judge)], [dict(row(case="a"), judge=judge)])
+
+        assert combined[0]["judge"]["model"] == "qwen + qwen"
+
+    def test_a_field_missing_from_an_older_run_is_not_a_crash(self):
+        first = dict(row(case="a"), judge={"model": "qwen"})
+        second = dict(row(case="a"), judge={"model": "nemotron", "prompt_version": "p", "rubric_version": "v1"})
+
+        assert combine([first], [second])[0]["judge"]["model"] == "qwen + nemotron"
+
+    @pytest.mark.parametrize(
+        "votes, reasons",
+        [
+            ((True, True), ([], [])),
+            ((True, False), (["LOW_EFFORT"], ["GENERIC_DESCRIPTION"])),
+            ((False, True), (["LOW_EFFORT"], ["LOW_EFFORT"])),
+            ((False, False), (["LOW_EFFORT"], [])),
+        ],
+    )
+    def test_saved_runs_and_live_judges_decide_alike(self, votes, reasons):
+        """F-01 of #13: both go through the same rule."""
+        combined = combine(
+            [row(case="a", rewardable=votes[0], reasons=reasons[0])],
+            [row(case="a", rewardable=votes[1], reasons=reasons[1])],
+        )[0]
+
+        assert (combined["rewardable"], tuple(combined["reasons"])) == veto(votes, reasons)

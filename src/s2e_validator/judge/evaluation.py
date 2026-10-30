@@ -18,8 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .contract import JudgeVerdict
+from .contract import JudgeVerdict, Provenance
 from .rubric import RUBRIC_V1, Rubric
+from .unanimous import combined_provenance, veto
 
 #: Statuses that decided a case: the judge scored it, or Stage 1 rejected it.
 DECIDED = ("SCORED", "REJECTED")
@@ -30,6 +31,10 @@ LINE_KINDS = ("good", "generic", "mismatch")
 
 class LabelError(ValueError):
     """The labels file cannot be measured as it is."""
+
+
+class RunMismatch(ValueError):
+    """Two saved runs cannot be combined."""
 
 
 @dataclass(frozen=True)
@@ -203,21 +208,28 @@ def held_out_pay_line(results: Sequence[Mapping[str, Any]], rubric: Rubric = RUB
     would be paid. Maximising plain agreement instead picks a knife edge,
     because the judge's scores take only a few values, and it did worse on the
     other half.
+
+    In combined runs the line applies to the lower of the two scores, so a
+    veto counts. A live two-model run records only the primary score, so its
+    line says so in "scored_on": it describes the first judge, not the pair.
     """
     blocking = rubric.blocking_reasons
     photos = sorted({row["photo"] for row in results})
     half = {photo: n % 2 for n, photo in enumerate(photos)}
     rows = [row for row in results if row["kind"] in LINE_KINDS and row["status"] == "SCORED"]
 
+    def score(row: Mapping[str, Any]) -> int:
+        return min(row["score"], row.get("second_score", row["score"]))
+
     def paid(row: Mapping[str, Any], line: int) -> bool:
-        return row["score"] >= line and not set(row["reasons"]) & blocking
+        return score(row) >= line and not set(row["reasons"]) & blocking
 
     def agree(line: int, side: int) -> tuple[int, int]:
         chosen = [row for row in rows if half[row["photo"]] == side]
         return sum(paid(row, line) == row["expect_rewardable"] for row in chosen), len(chosen)
 
     wrongly_paid = [
-        row["score"] for row in rows
+        score(row) for row in rows
         if half[row["photo"]] == 0 and not row["expect_rewardable"] and not set(row["reasons"]) & blocking
     ]
     best = min(100, max(wrongly_paid, default=-1) + 1)
@@ -229,6 +241,7 @@ def held_out_pay_line(results: Sequence[Mapping[str, Any]], rubric: Rubric = RUB
         "chosen_on": f"{fit}/{fit_cases}",
         "held_out": f"{held}/{held_cases}",
         "held_out_at_current_line": f"{current}/{held_cases} at {rubric.min_rewardable_score}",
+        "scored_on": "both judges" if any("second_score" in row for row in rows) else "first judge only",
     }
 
 
@@ -236,20 +249,43 @@ def combine(first: Sequence[Mapping[str, Any]], second: Sequence[Mapping[str, An
     """Two saved runs on the same labels, paid only where both paid.
 
     The same rule as UnanimousJudge: a hold in either is a hold, the first
-    run's score and ratings stand, and reasons from both are kept.
+    run's score and ratings stand, reasons from both are kept, and a
+    disagreement is marked. The second score is kept for the pay line. A case
+    only one run rejected at Stage 1 means the runs used different text checks,
+    so they are refused: the result would depend on their order.
     """
     others = {row["case"]: row for row in second}
     if set(others) != {row["case"] for row in first}:
-        raise LabelError("the two runs are not on the same cases")
+        raise RunMismatch("the two runs are not on the same cases")
     combined = []
     for mine in first:
         other = others[mine["case"]]
+        if (mine["status"] == "REJECTED") != (other["status"] == "REJECTED"):
+            raise RunMismatch(f"case {mine['case']!r} was rejected at Stage 1 in only one run: different text checks?")
         row = dict(mine)
+        row["judge"] = _combined_judge(mine.get("judge"), other.get("judge"))
         held = next((r for r in (mine, other) if r["status"] == "HELD"), None)
         if held is not None:
             row.update(status="HELD", score=None, rewardable=None, hold_reason=held["hold_reason"])
-        elif mine["status"] == "SCORED" and other["status"] == "SCORED":
-            row["rewardable"] = bool(mine["rewardable"] and other["rewardable"])
-            row["reasons"] = list(dict.fromkeys(list(mine["reasons"]) + list(other["reasons"])))
+        elif mine["status"] == "SCORED":
+            rewardable, reasons = veto(
+                [bool(mine["rewardable"]), bool(other["rewardable"])], [mine["reasons"], other["reasons"]]
+            )
+            row["rewardable"] = rewardable
+            row["reasons"] = list(reasons)
+            row["second_score"] = other["score"]
         combined.append(row)
     return combined
+
+
+def _combined_judge(first: Mapping[str, Any] | None, second: Mapping[str, Any] | None) -> dict[str, str] | None:
+    """Provenance naming both runs, the way UnanimousJudge does for live verdicts."""
+    if not first or not second:
+        return dict(first or second) if (first or second) else None
+    joined = combined_provenance([_provenance(first), _provenance(second)])
+    return {"model": joined.model, "prompt_version": joined.prompt_version, "rubric_version": joined.rubric_version}
+
+
+def _provenance(saved: Mapping[str, Any]) -> Provenance:
+    """A saved row's provenance; a field an older run did not record stays empty."""
+    return Provenance(saved.get("model", ""), saved.get("prompt_version", ""), saved.get("rubric_version", ""))

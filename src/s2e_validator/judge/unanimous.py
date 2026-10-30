@@ -1,10 +1,10 @@
 """Several judges, and a submission is paid only if every one of them would pay it.
 
-Measured on our labelled set (README, "The judge, measured"): Qwen2.5-VL-7B
-alone agreed on 259 of 268 cases, NVIDIA Nemotron Nano 12B v2 VL alone on 193
-(it pays good descriptions every time, but most generic ones too), and the two
-together, paying only when both would, on 260. A second model with a veto can
-only stop payments, so it cannot make a wrong payout more likely.
+The measured numbers are in the README ("Two judges: pay only when both
+agree"). The trade-off: a veto can only stop payments, so a second model cannot
+make a wrong payout more likely, but it can withhold a correct one, it costs a
+second model's time on every submission, and either judge being down holds the
+submission.
 """
 
 from __future__ import annotations
@@ -18,6 +18,20 @@ from .judge import Judge
 #: Added to a verdict when the judges disagreed about paying it, so every veto
 #: can be found in the audit log.
 REASON_JUDGES_DISAGREE = "JUDGES_DISAGREE"
+
+
+def veto(votes: Sequence[bool], reasons: Sequence[Sequence[str]]) -> tuple[bool, tuple[str, ...]]:
+    """The rule itself: paid only if every vote pays, reasons from all kept.
+
+    Reasons keep their order without repeats, and a disagreement is marked.
+    Live verdicts and saved runs both decide here, so the two cannot drift.
+    """
+    merged: list[str] = []
+    for codes in reasons:
+        merged.extend(code for code in codes if code not in merged)
+    if len(set(votes)) > 1:
+        merged.append(REASON_JUDGES_DISAGREE)
+    return all(votes), tuple(merged)
 
 
 class UnanimousJudge:
@@ -35,7 +49,7 @@ class UnanimousJudge:
 
     def judge(self, item: JudgeInput) -> JudgeVerdict:
         verdicts = [judge.judge(item) for judge in self._judges]
-        provenance = _combined(v.provenance for v in verdicts)
+        provenance = combined_provenance([v.provenance for v in verdicts])
         attempts = max(v.attempts for v in verdicts)
 
         held = next((v for v in verdicts if v.status is JudgeStatus.HELD), None)
@@ -43,23 +57,20 @@ class UnanimousJudge:
             return JudgeVerdict.held(item, provenance, held.hold_reason, attempts)
 
         primary = verdicts[0]
-        votes = [v.is_rewardable for v in verdicts]
-        reasons: list[str] = []
-        for verdict in verdicts:
-            reasons.extend(code for code in verdict.reason_codes if code not in reasons)
-        if len(set(votes)) > 1:
-            reasons.append(REASON_JUDGES_DISAGREE)
+        rewardable, reasons = veto(
+            [v.is_rewardable for v in verdicts], [v.reason_codes for v in verdicts]
+        )
         return replace(
             primary,
             provenance=provenance,
-            is_rewardable=all(votes),
-            reason_codes=tuple(reasons),
+            is_rewardable=rewardable,
+            reason_codes=reasons,
             attempts=attempts,
         )
 
 
-def _combined(provenances) -> Provenance:
-    provenances = list(provenances)
+def combined_provenance(provenances: Sequence[Provenance]) -> Provenance:
+    """Every model named, even a repeat; each version once."""
     return Provenance(
         model=" + ".join(p.model for p in provenances),
         prompt_version=" + ".join(dict.fromkeys(p.prompt_version for p in provenances)),
